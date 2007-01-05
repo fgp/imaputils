@@ -1,0 +1,15 @@
+folders:
+  ignore:
+    - <Folder to ignore>
+    - <Folder to ignore>
+imap:
+  src:
+    server: <servername>
+    mech: <authentication mechanism>
+    proxyusr: <user to authenticate as>
+    proxypwd: <password of authuser>
+  dst:
+    server: <servername>
+    mech: <authentication mechanism>
+    proxyusr: <user to authenticate as>
+    proxypwd: <password of authuser>

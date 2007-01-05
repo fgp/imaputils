@@ -3211,6 +3211,23 @@ module Net
       end
     end
 
+    class ProxyAuthenticator
+      #Can be called with either "user, password" or
+      #"authorization_user", "authentication_user", "password".
+      #authorization_user: The user whose role you wanto to assume.
+      #authentication_user: The user you authenticate as
+      #password: The password of the authentication_user.
+      def initialize(authzuser_or_authuser, authuser_or_password, password = nil)
+        if (password)
+          @authz_user, @auth_user, @password = 
+          authzuser_or_authuser, authuser_or_password, password
+        else
+          @authz_user, @auth_user, @password =
+          "", authzuser_or_authuser, authuser_or_password
+        end
+      end
+    end
+
     # Authenticator for the "LOGIN" authentication type.  See
     # #authenticate().
     class LoginAuthenticator
@@ -3237,30 +3254,6 @@ module Net
     end
     add_authenticator "LOGIN", LoginAuthenticator
 
-    # Authenticator for the "PLAIN" authentication type. Supports proxy
-    # authentication. See #authenticate().
-    class PlainAuthenticator
-      #Can be called with either "user, password" or
-      #"authorization_user", "authentication_user", "password".
-      #authorization_user: The user whose role you wanto to assume.
-      #authentication_user: The user you authenticate as
-      #password: The password of the authentication_user.
-      def initialize(authzuser_or_authuser, authuser_or_password, password = nil)
-        if (password)
-          @authz_user, @auth_user, @password = 
-          authzuser_or_authuser, authuser_or_password, password
-        else
-          @authz_user, @auth_user, @password =
-          "", authzuser_or_authuser, authuser_or_password
-        end
-      end
-      
-      def process(data)
-        return "#{@authz_user}\000#{@auth_user}\000#{@password}"
-      end
-    end
-    Net::IMAP.add_authenticator "PLAIN", PlainAuthenticator
-    
     # Authenticator for the "CRAM-MD5" authentication type.  See
     # #authenticate().
     class CramMD5Authenticator
@@ -3269,12 +3262,12 @@ module Net
         return @user + " " + digest
       end
 
-      private
-
       def initialize(user, password)
         @user = user
         @password = password
       end
+
+      private
 
       def hmac_md5(text, key)
         if key.length > 64
@@ -3294,6 +3287,52 @@ module Net
       end
     end
     add_authenticator "CRAM-MD5", CramMD5Authenticator
+
+    #Baseclass for Authenticators that support proxy auth.
+    class ProxyAuthenticator
+      #Can be called with either "user, password" or
+      #"authorization_user", "authentication_user", "password".
+      #authorization_user: The user whose role you wanto to assume.
+      #authentication_user: The user you authenticate as
+      #password: The password of the authentication_user.
+      #
+      # We set:
+      #   @authz_user: authorization user (or nil, if no proxy auth is used)
+      #   @auth_user:  authentication user
+      #   @password:   password of auth_user
+      #   @identity: @authz_user\000@auth_user, or @authuser
+      def initialize(authzuser_or_authuser, authuser_or_password, password = nil)
+        if (password)
+          @authz_user, @auth_user, @password = 
+          authzuser_or_authuser, authuser_or_password, password
+        else
+          @authz_user, @auth_user, @password =
+          nil, authzuser_or_authuser, authuser_or_password
+        end
+        if @authz_user
+          @identity = @authz_user + "\000" + @auth_user
+        else
+          @identity = @auth_user
+        end
+      end
+    end
+
+    # Authenticator for the "PLAIN" authentication type. Supports proxy
+    # authentication. See #authenticate().
+    class PlainAuthenticator < ProxyAuthenticator
+      def process(data)
+        return "#{@identity}\000#{@password}"
+      end
+    end
+    Net::IMAP.add_authenticator "PLAIN", PlainAuthenticator
+
+    class DigestMD5Authenticator < ProxyAuthenticator
+      def process(data)
+        STDERR::puts data.inspect
+        raise "STOP"
+      end
+    end    
+    Net::IMAP.add_authenticator "DIGEST-MD5", DigestMD5Authenticator
 
     # Superclass of IMAP errors.
     class Error < StandardError

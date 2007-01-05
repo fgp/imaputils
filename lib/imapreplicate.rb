@@ -14,45 +14,62 @@ class ImapReplicator
     @src = Net::IMAP::new(SXCfg::Default.imap.src.server.string)
     @dst = Net::IMAP::new(SXCfg::Default.imap.dst.server.string)
     if !pw_src
-      pw_src = SXCfg::Default.imap.src.password.string
+      pw_src = SXCfg::Default.imap.src.proxypwd.string
       if pw_src[0] == ?< then
         pw_src = File::read(pw_src[1..-1])
       end
     end
     if !pw_dst
-      pw_dst = SXCfg::Default.imap.dst.password.string
+      pw_dst = SXCfg::Default.imap.dst.proxypwd.string
       if pw_dst[0] == ?< then
         pw_dst = File::read(pw_dst[1..-1])
       end
     end
-    @src.authenticate(
+    authenticate(
+      @src,
       SXCfg::Default.imap.src.mech.string,
       user_src,
-      *(
-        if !SXCfg::Default.imap.src.user.string
-          [pw_src]
-        else
-          [SXCfg::Default.imap.src.user.string, pw_src]
-        end
-      )
+      SXCfg::Default.imap.src.proxyusr.string,
+      pw_src
     )
-    @dst.authenticate(
+    authenticate(
+      @dst,
       SXCfg::Default.imap.dst.mech.string,
       user_dst,
-      *(
-        if !SXCfg::Default.imap.dst.user.string
-          [pw_dst]
-        else
-          [SXCfg::Default.imap.dst.user.string, pw_dst]
-        end
-      )
+      SXCfg::Default.imap.dst.proxyusr.string,
+      pw_dst
     )
+
     raise ServerError::new("Couldn't determine source mailbox hierachy delimiter.") if
       ((r = @src.list("", "")).length < 1)
     @delimiter_src = r.first.delim
     raise ServerError::new("Couldn't determine destination mailbox hierachy delimiter.") if
       ((r = @dst.list("", "")).length < 1)
     @delimiter_dst = r.first.delim
+  end
+
+  def authenticate(con, mech, authz_user, auth_user, password)
+    begin
+      con.authenticate(
+        mech,
+        authz_user,
+        *(
+          if !auth_user
+            [password]
+          else
+            [auth_user, password]
+          end
+        )
+      )
+    rescue Net::IMAP::NoResponseError
+      if auth_user
+        STDOUT::puts "Failed to authorize as #{authz_user} by authenticating as #{auth_user} via #{mech}"
+        raise
+      else
+        STDOUT::puts "Failed to authenticate as #{authz_user} via #{mech}"
+        raise
+      end
+    end
   end
   
   def replicate
