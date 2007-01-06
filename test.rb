@@ -1,6 +1,6 @@
 #!/usr/bin/ruby1.8
 require 'lib/sxconfig'
-require 'lib/imapclient'
+require 'lib/imapprocess'
 
 SXCfg.use("cyrus-dspam")
 

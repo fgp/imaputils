@@ -100,15 +100,17 @@ class ImapFolderReplicator
     attr_reader :id_str, :id_hash
 
     def initialize(envelope)
-      if envelope.message_id && !envelope.message_id.empty? then
-        @id_str = envelope.message_id
+      if envelope.message_id && !envelope.message_id.empty?
+        @id_str =
+          (envelope.date || "") + 0.chr +
+          (envelope.message_id || "")
       else
         @id_str =
-          (envelope.date || "") + "\0" +
-          (envelope.subject || "") + "\0" +
-          addrlist(envelope.from) + "\0" +
-          addrlist(envelope.to) + "\0" +
-          addrlist(envelope.cc) + "\0" +
+          (envelope.date || "") + 0.chr +
+          (envelope.subject || "") + 0.chr +
+          addrlist(envelope.from) + 0.chr +
+          addrlist(envelope.to) + 0.chr +
+          addrlist(envelope.cc) + 0.chr +
           addrlist(envelope.bcc)
       end
       @id_hash = @id_str.hash
@@ -117,8 +119,9 @@ class ImapFolderReplicator
     def addrlist(ary)
        return "" unless ary
        (ary.collect do |e|
+         next nil unless e.mailbox && e.host
          e.mailbox + "@" + e.host
-       end).sort.join(",")
+       end).compact.sort.join(",")
     end
 
     def hash
@@ -293,6 +296,12 @@ class ImapFolderReplicator
  
     i_src, i_dst = 0,0
     while (i_src < msgs_src.length) && (i_dst < msgs_dst.length)
+      #Skip messages with the same id as their predecessor
+      if (i_src > 0) && (msgs_src[i_src-1].msgid == msgs_src[i_src])
+        i_src += 1
+        next
+      end
+
       if (msgs_src[i_src].msgid == msgs_dst[i_dst].msgid)
         #Message exists on both sides
         if (msgs_src[i_src].flags != msgs_dst[i_dst].flags)
@@ -304,7 +313,7 @@ class ImapFolderReplicator
         i_dst += 1
       elsif (msgs_src[i_src].msgid < msgs_dst[i_dst].msgid)
         #Message is missing on destination
-        added_msgs << msgs_src[i_dst]
+        added_msgs << msgs_src[i_src]
         i_src += 1
       else
         #Message was removed on source
