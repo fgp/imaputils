@@ -13,6 +13,7 @@ class ImapReplicator
   def initialize(user_src, user_dst, pw_src = nil, pw_dst = nil)
     @src = Net::IMAP::new(SXCfg::Default.imap.src.server.string)
     @dst = Net::IMAP::new(SXCfg::Default.imap.dst.server.string)
+    @dst_dont_delete = SXCfg::Default.imap.dst.dont_delete.bool
     if !pw_src
       pw_src = SXCfg::Default.imap.src.proxypwd.string
       if pw_src[0] == ?< then
@@ -83,7 +84,7 @@ class ImapReplicator
       else
         folder_src
       end
-      repl = ImapFolderReplicator::new(self, folder_src, folder_dst)
+      repl = ImapFolderReplicator::new(self, folder_src, folder_dst, @dst_dont_delete)
       STDOUT::puts "Processing folder #{folder_src} -> #{folder_dst}"
       repl.replicate
       STDOUT::puts "Finished processing #{folder_src} -> #{folder_dst}"
@@ -139,9 +140,10 @@ class ImapFolderReplicator
     end
   end
 
-  def initialize(repl, folder_src, folder_dst)
+  def initialize(repl, folder_src, folder_dst, dont_delete = false)
     @replicator = repl
     @folder_src, @folder_dst = folder_src, folder_dst
+    @dont_delete = dont_delete
   end
   
   def replicate
@@ -156,7 +158,7 @@ class ImapFolderReplicator
     msgs_src = query_msgs(@replicator.src, "Source")
     msgs_dst = query_msgs(@replicator.dst, "Destination")
     added_msgs, updated_msgs, removed_msgs = *diff_msgs(msgs_src, msgs_dst)
-    delete_msgs(removed_msgs)
+    delete_msgs(removed_msgs) unless @dont_delete
     update_msgs(updated_msgs)
     add_msgs(added_msgs)
     @replicator.dst.examine(@folder_dst) #Reopen readonly, instead of close,
