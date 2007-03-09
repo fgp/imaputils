@@ -2,7 +2,57 @@ require 'lib/sxconfig.rb'
 require 'lib/imap'
 require 'lib/imapstate'
 
-class ImapClient
+module ImapClient
+  def self.login(user=nil)
+    user = user || SXCfg::Default.imap.user.string
+    imapcon = Net::IMAP::new(SXCfg::Default.imap.server.string)
+    pw = SXCfg::Default.imap.password.string
+    if pw[0] == ?< then
+      pw = File::read(pw[1..-1])
+    end
+    imapcon.authenticate(
+      "PLAIN",
+      user,
+      SXCfg::Default.imap.user.string,
+      pw
+    )
+    raise ServerError::new("Couldn't determine mailbox hierachy delimiter.") if
+      ((r = imapcon.list("", "")).length < 1)
+    [imapcon, user, r.first.delim]
+  end
+end
+
+class ImapProcessor
+  attr_accessor :batchsize
+  attr_accessor(
+    :handler_miss_innocent,
+    :handler_miss_junk,
+    :handler_corpus_innocent,
+    :handler_corpus_junk
+  )
+
+  def process_users(pattern='%')
+    @imapcon, user, delimiter = ImapClient::login
+    users = @imapcon.list(
+      "",
+      "#{SXCfg::Default.imap.user_prefix.string}#{delimiter}%"
+    ).collect do |mbox|
+      next unless mbox.name =~ /^#{Regexp::escape(SXCfg::Default.imap.user_prefix.string+delimiter)}(.*)$/
+      $1
+    end
+    users.each do |user|
+      iup = ImapUserProcessor::new(user)
+      iup.batchsize = @batchsize if @batchsize
+      iup.handler_miss_innocent = @handler_miss_innocent if @handler_miss_innocent
+      iup.handler_miss_junk = @handler_miss_junk if @handler_miss_junk
+      iup.handler_corpus_innocent = @handler_corpus_innocent if @handler_corpus_innocent
+      iup.handler_corpus_junk = @handler_corpus_junk if @handler_corpus_junk
+      iup.process_folders
+    end
+  end
+end
+
+class ImapUserProcessor
   class ServerConfigError < Exception
   end
   class ServerError < Exception
@@ -89,22 +139,8 @@ private
 
 public
 
-  def initialize(user, limit=nil)
-    @user = user
-    @imapcon = Net::IMAP::new(SXCfg::Default.imap.server.string)
-    pw = SXCfg::Default.imap.password.string
-    if pw[0] == ?< then
-      pw = File::read(pw[1..-1])
-    end
-    @imapcon.authenticate(
-      "PLAIN",
-      @user,
-      SXCfg::Default.imap.user.string,
-      pw
-    )
-    raise ServerError::new("Couldn't determine mailbox hierachy delimiter.") if
-      ((r = @imapcon.list("", "")).length < 1)
-    @delimiter = r.first.delim
+  def initialize(user=nil, limit=nil)
+    @imapcon, @user, @delimiter = *ImapClient::login(user)
     @nr_remaining = limit
     @batchsize = 2048
   end
@@ -115,11 +151,12 @@ public
     end
     folders.each do |folder|
       break unless !@nr_remaining || (@nr_remaining > 0)
-      case folder
-        when "Junk" then process_junk_folder(folder)
-        when "Trash" then next
-        else
-          process_standard_folder(folder)
+      if SXCfg::Default.imap.junk_folders.array.include? folder
+        process_junk_folder(folder)
+      elsif SXCfg::Default.imap.ignore_folders.array.include? folder
+        next
+      else
+        process_standard_folder(folder)
       end
     end
   end
@@ -156,17 +193,17 @@ public
     ) do |md|
       if md.junk then
         if md.classifiedinnocent then
-          @handler_miss_junk.call(md)
+          @handler_miss_junk.call(md) if @handler_miss_junk
         elsif !md.classifiedinnocent && !md.classifiedjunk
-          @handler_corpus_junk.call(md)
+          @handler_corpus_junk.call(md) if @handler_corpus_junk
         end
         md.classifiedjunk = true
         md.classifiedinnocent = false
       else
         if md.classifiedjunk then
-          @handler_miss_innocent.call(md)
+          @handler_miss_innocent.call(md) if @handler_miss_innocent
         elsif !md.classifiedinnocent && !md.classifiedjunk
-          @handler_corpus_innocent.call(md)
+          @handler_corpus_innocent.call(md) if @handler_corpus_innocent
         end
         md.classifiedjunk = false
         md.classifiedinnocent = true
@@ -185,9 +222,9 @@ public
       "NOT KEYWORD $ClassifiedJunk"
     ) do |md|
       if md.classifiedinnocent then
-        @handler_miss_junk.call(md)
+        @handler_miss_junk.call(md) if @handler_miss_junk
       elsif !md.classifiedinnocent && !md.classifiedjunk
-        @handler_corpus_junk.call(md)
+        @handler_corpus_junk.call(md) if @handler_corpus_junk
       end
       md.classifiedjunk = true
       md.classifiedinnocent = false
