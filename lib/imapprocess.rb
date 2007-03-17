@@ -365,7 +365,7 @@ public
     
     if (@folder_state.uidvalidity != @uidvalidity)
       STDOUT::puts "    UIDVALIDITY changed for #{folder}."
-      @uidnext = @highestmodseq = 0
+      @folder_state.uidnext = @folder_state.highestmodseq = 0
     end
 
     return true

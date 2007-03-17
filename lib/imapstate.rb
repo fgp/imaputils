@@ -24,7 +24,7 @@ class ImapState
   private
   
   def read_state
-    raise FileLocked::new("File #{file} is locked.") unless
+    raise FileLocked::new("File #{@file.path} is locked.") unless
       @file.flock(File::LOCK_EX | File::LOCK_NB)
     @uidvalidity = @uidnext = @highestmodseq = nil
     @file.each_line do |line|
