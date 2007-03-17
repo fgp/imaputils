@@ -3,6 +3,10 @@ require 'lib/imap'
 require 'lib/imapstate'
 
 module ImapClient
+  #Connections to the server specified in the config file as
+  #the given user.
+  #Returns a connection, the user (In case it was defaulted
+  #for the config file too), and the delimiter.
   def self.login(user=nil)
     user = user || SXCfg::Default.imap.user.string
     imapcon = Net::IMAP::new(SXCfg::Default.imap.server.string)
@@ -31,15 +35,17 @@ class ImapProcessor
     :handler_corpus_junk
   )
 
+  #Process all users that match the given pattern
   def process_users(pattern='%')
     @imapcon, user, delimiter = ImapClient::login
-    users = @imapcon.list(
+    users = (@imapcon.list(
       "",
       "#{SXCfg::Default.imap.user_prefix.string}#{delimiter}%"
     ).collect do |mbox|
-      next unless mbox.name =~ /^#{Regexp::escape(SXCfg::Default.imap.user_prefix.string+delimiter)}(.*)$/
+      next nil if mbox.attr.include? :Noselect
+      next nil unless mbox.name =~ /^#{Regexp::escape(SXCfg::Default.imap.user_prefix.string+delimiter)}(.*)$/
       $1
-    end
+    end).compact
     users.each do |user|
       iup = ImapUserProcessor::new(user)
       iup.batchsize = @batchsize if @batchsize
@@ -78,6 +84,8 @@ private
     :subject
   )
 
+  #This class manages retrieval of message flags, and of updating
+  #them on the server.
   class MessageData
     FetchData = {
       "FLAGS" => proc do |e, a|
@@ -127,13 +135,38 @@ private
         e_new = e_orig.dup
         yield(e_new)
         add, remove = *diff_flags(e_orig, e_new)
-        flags_add[add] ||= Array::new
-        flags_add[add] << r.seqno
-        flags_remove[remove] ||= Array::new
-        flags_remove[remove] << r.seqno
+        unless add.empty?
+          flags_add[add] ||= Array::new
+          flags_add[add] << r.seqno
+        end
+        unless remove.empty?
+          flags_remove[remove] ||= Array::new
+          flags_remove[remove] << r.seqno
+        end
       end
       flags_remove.each { |fs, ids| con.store(ids, "-FLAGS.SILENT", fs) }
       flags_add.each { |fs, ids| con.store(ids, "+FLAGS.SILENT", fs) }
+    end
+  end
+
+  module AutoPromoteExamineToSelect
+    def select(folder, *args)
+      @selected = @examined = nil
+      r = super(folder, *args)
+      @selected = [folder, *args]
+      r
+    end
+
+    def examine(folder, *args)
+      @selected = @examined = nil
+      r = super(folder, *args)
+      @examined = [folder, *args]
+      r
+    end
+
+    def store(*args)
+      select(*@examined) if @examined
+      super(*args)
     end
   end
 
@@ -141,19 +174,23 @@ public
 
   def initialize(user=nil, limit=nil)
     @imapcon, @user, @delimiter = *ImapClient::login(user)
+    class <<@imapcon
+      include AutoPromoteExamineToSelect
+    end
     @nr_remaining = limit
     @batchsize = 2048
   end
   
   def process_folders
-    folders = @imapcon.list("", "*").collect do |mbox|
-      mbox.name  
-    end
+    folders = (@imapcon.list("", "*").collect do |mbox|
+      next nil if mbox.attr.include? :Noselect
+      mbox.name
+    end).compact
     folders.each do |folder|
       break unless !@nr_remaining || (@nr_remaining > 0)
-      if SXCfg::Default.imap.junk_folders.array.include? folder
+      if SXCfg::Default.folder.junk.array.include? folder
         process_junk_folder(folder)
-      elsif SXCfg::Default.imap.ignore_folders.array.include? folder
+      elsif SXCfg::Default.folder.ignore.array.include? folder
         next
       else
         process_standard_folder(folder)
@@ -184,29 +221,46 @@ public
   def process_standard_folder(folder)
     open_folder(folder)
 
-    process_messages(
-      "MODSEQ #{@folder_state.highestmodseq} " +
-      "NOT DELETED " +
+    condition = if (@handler_corpus_junk || @handler_corpus_innocent) &&
+       (SXCfg::Default.folder.corpus.array.empty? ||
+        (SXCfg::Default.folder.corpus.array.include? folder))
+    then
+      #Handle corpus for this folder.
       "OR " +
         "(KEYWORD Junk NOT KEYWORD $ClassifiedJunk) " +
         "(NOT KEYWORD Junk NOT KEYWORD $ClassifiedInnocent)"
+    else
+      #Don't handle corpus for this folder
+      "OR " +
+        "(KEYWORD Junk KEYWORD $ClassifiedInnocent) " +
+        "(NOT KEYWORD Junk KEYWORD $ClassifiedJunk)"
+    end
+
+    process_messages(
+      "MODSEQ #{@folder_state.highestmodseq} " +
+      "NOT DELETED " +
+      condition
     ) do |md|
       if md.junk then
         if md.classifiedinnocent then
           @handler_miss_junk.call(md) if @handler_miss_junk
-        elsif !md.classifiedinnocent && !md.classifiedjunk
-          @handler_corpus_junk.call(md) if @handler_corpus_junk
+          md.classifiedjunk = true
+          md.classifiedinnocent = false
+        elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_junk
+          @handler_corpus_junk.call(md)
+          md.classifiedjunk = true
+          md.classifiedinnocent = false
         end
-        md.classifiedjunk = true
-        md.classifiedinnocent = false
       else
         if md.classifiedjunk then
           @handler_miss_innocent.call(md) if @handler_miss_innocent
-        elsif !md.classifiedinnocent && !md.classifiedjunk
-          @handler_corpus_innocent.call(md) if @handler_corpus_innocent
+          md.classifiedjunk = false
+          md.classifiedinnocent = true
+        elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_innocent
+          @handler_corpus_innocent.call(md)
+          md.classifiedjunk = false
+          md.classifiedinnocent = true
         end
-        md.classifiedjunk = false
-        md.classifiedinnocent = true
       end
     end
 
@@ -216,18 +270,31 @@ public
   def process_junk_folder(folder)
     open_folder(folder)    
 
+    condition = if @handler_corpus_junk &&
+       (SXCfg::Default.folder.corpus.array.empty? ||
+        (SXCfg::Default.folder.corpus.array.include? folder))
+    then
+      #Handle corpus for this folder.
+      "NOT KEYWORD $ClassifiedJunk"
+    else
+      #Don't handle corpus for this folder
+      "KEYWORD $ClassifiedInnocent"
+    end
+
     process_messages(
       "MODSEQ #{@folder_state.highestmodseq} " +
       "NOT DELETED " +
-      "NOT KEYWORD $ClassifiedJunk"
+      condition
     ) do |md|
       if md.classifiedinnocent then
         @handler_miss_junk.call(md) if @handler_miss_junk
-      elsif !md.classifiedinnocent && !md.classifiedjunk
-        @handler_corpus_junk.call(md) if @handler_corpus_junk
+        md.classifiedjunk = true
+        md.classifiedinnocent = false
+      elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_junk
+        @handler_corpus_junk.call(md)
+        md.classifiedjunk = true
+        md.classifiedinnocent = false
       end
-      md.classifiedjunk = true
-      md.classifiedinnocent = false
     end
     
     close_folder
@@ -239,7 +306,7 @@ public
     @folder = folder  
     @folder_state = ImapState::new(@user + "." + folder)
 
-    @imapcon.select(folder, "CONDSTORE")
+    @imapcon.examine(folder, "CONDSTORE")
     raise ServerError::new("Server reported no UIDVALIDITY for #{folder}") unless
       @imapcon.responses["UIDVALIDITY"] && @imapcon.responses["UIDVALIDITY"][-1]
       
@@ -247,7 +314,7 @@ public
     unless @imapcon.responses["HIGHESTMODSEQ"] && @imapcon.responses["HIGHESTMODSEQ"][-1]
       STDOUT::puts "    CONDSTORE not available. Trying to fix."
       @imapcon.setannotation(folder, "/vendor/cmu/cyrus-imapd/condstore", "true")
-      @imapcon.select(folder, "CONDSTORE")
+      @imapcon.examine(folder, "CONDSTORE")
       if @imapcon.responses["HIGHESTMODSEQ"] && @imapcon.responses["HIGHESTMODSEQ"][-1]
         STDOUT::puts "    Enabled CONDSTORE for #{folder}."      
       else
@@ -271,7 +338,17 @@ public
   def close_folder
     @folder_state.uidvalidity = @uidvalidity
     @folder_state.highestmodseq = @highestmodseq+1
-    @imapcon.close
+
+    #CLOSE does an implicit expunge. We want to avoid that, but
+    #at the same time we want to make sure the folder is not
+    #selected anymore. We therefor send a bogus EXAMINE command,
+    #which according to the RFC should cause the folder to
+    #be unselected.
+    begin
+      @imapcon.examine("")
+    rescue Net::IMAP::NoResponseError
+    end
+
     @folder_state.save
     STDOUT::puts "  Finished processing #{@folder}"
   rescue
