@@ -198,28 +198,50 @@ public
     end
   end
 
-  # We retries all messages matching querystr, sorted by MODSEQ.
+  # We retries all messages matching querystr, sorted by MODSEQ,
+  # which were modified after we last changed the folder.
   # For each message that we processed successfully, set @highestmodseq
   # to the value of the message.
   def process_messages(querystr)
-    ids = @imapcon.sort(["MODSEQ"], querystr, "UTF-8")
-    return if ids.empty?
-    STDOUT::puts "    Will process #{[ids.length, @nr_remaining].compact.min} messages out of #{ids.length} matching in batches of #{@batchsize}."
-    ids = ids[0...@nr_remaining] if @nr_remaining
+    ids_pending = @imapcon.sort(
+      ["MODSEQ"],
+      "MODSEQ #{@folder_state.highestmodseq+1} " +
+      querystr,
+      "UTF-8"
+    )
 
-    while !ids.empty?
-      ids_now = ids.slice!(0, [ids.length, @batchsize].min)
-      STDOUT::puts "    Processing batch of #{ids_now.size} messages."
-      MessageData::process_messages(@imapcon, ids_now) do |md|
-        yield(md)
-        @highestmodseq = md.modseq
-        @nr_remaining -= 1 if @nr_remaining
+    if @nr_remaining
+      ids = ids_pending[0...@nr_remaining]
+    else
+      ids = ids_pending
+    end
+
+    if !ids_pending.empty?
+      STDOUT::puts "    Will process #{ids.length} messages out of #{ids_pending.length} matching in batches of #{@batchsize}."
+      
+      while !ids.empty?
+        ids_now = ids.slice!(0, [ids.length, @batchsize].min)
+        STDOUT::puts "    Processing batch of #{ids_now.size} messages."
+        MessageData::process_messages(@imapcon, ids_now) do |md|
+          yield(md)
+          @folder_state.highestmodseq = md.modseq
+          @nr_remaining -= 1 if @nr_remaining
+        end
       end
+    end
+
+    #We have to check if we processed _all_ pending changes,
+    #and if so set highestmodseq to the highestmodseq of then
+    #folder. Otherwise, checking for "nothing to do" by comparing
+    #our last highestmodseq, and the highestmodseq of the folder
+    #doesn't work.
+    if ids_pending.length == ids.length then
+      @folder_state.highestmodseq = @highestmodseq
     end
   end
 
   def process_standard_folder(folder)
-    open_folder(folder)
+    return unless open_folder(folder)
 
     condition = if (@handler_corpus_junk || @handler_corpus_innocent) &&
        (SXCfg::Default.folder.corpus.array.empty? ||
@@ -237,7 +259,6 @@ public
     end
 
     process_messages(
-      "MODSEQ #{@folder_state.highestmodseq} " +
       "NOT DELETED " +
       condition
     ) do |md|
@@ -268,7 +289,7 @@ public
   end
 
   def process_junk_folder(folder)
-    open_folder(folder)    
+    return unless open_folder(folder)    
 
     condition = if @handler_corpus_junk &&
        (SXCfg::Default.folder.corpus.array.empty? ||
@@ -282,7 +303,6 @@ public
     end
 
     process_messages(
-      "MODSEQ #{@folder_state.highestmodseq} " +
       "NOT DELETED " +
       condition
     ) do |md|
@@ -299,23 +319,26 @@ public
     
     close_folder
   end
-
+ 
+  #Opens a folder.
+  #If nothing seems to have changed, the folder is _not_ selected,
+  #and false is returned. Otherwise the folder is selected read-only
+  #and true is returned.
   def open_folder(folder)
-    STDOUT::puts "  Processing #{folder}"
+    STDOUT::puts "  Checking #{folder}"
 
     @folder = folder  
     @folder_state = ImapState::new(@user + "." + folder)
 
-    @imapcon.examine(folder, "CONDSTORE")
-    raise ServerError::new("Server reported no UIDVALIDITY for #{folder}") unless
-      @imapcon.responses["UIDVALIDITY"] && @imapcon.responses["UIDVALIDITY"][-1]
+    resp = @imapcon.status(folder, ["UIDVALIDITY", "UIDNEXT", "HIGHESTMODSEQ"])
       
     #Try to activate CONDSTORE.
-    unless @imapcon.responses["HIGHESTMODSEQ"] && @imapcon.responses["HIGHESTMODSEQ"][-1]
+    unless resp["HIGHESTMODSEQ"] && (resp["HIGHESTMODSEQ"] > 0)
       STDOUT::puts "    CONDSTORE not available. Trying to fix."
       @imapcon.setannotation(folder, "/vendor/cmu/cyrus-imapd/condstore", "true")
-      @imapcon.examine(folder, "CONDSTORE")
-      if @imapcon.responses["HIGHESTMODSEQ"] && @imapcon.responses["HIGHESTMODSEQ"][-1]
+      resp = @imapcon.status(folder, ["UIDVALIDITY", "UIDNEXT", "HIGHESTMODSEQ"])
+      if resp["HIGHESTMODSEQ"] && (resp["HIGHESTMODSEQ"] > 0)
+      then
         STDOUT::puts "    Enabled CONDSTORE for #{folder}."      
       else
         STDOUT::puts "    Couldn't enable CONDSTORE."
@@ -323,21 +346,40 @@ public
       end
     end
 
+    if
+      (@folder_state.uidvalidity == resp["UIDVALIDITY"]) &&
+      (@folder_state.uidnext == resp["UIDNEXT"]) &&
+      (@folder_state.highestmodseq == resp["HIGHESTMODSEQ"])
+    then
+      #Nothing changed. Return false.
+      @folder = @folder_state = nil
+      return false
+    end
+
+    #Something changed. Open folder in read-only mode.
+    STDOUT::puts "  Processing #{folder}"
+    @imapcon.examine(folder, "CONDSTORE")
     @uidvalidity = @imapcon.responses["UIDVALIDITY"][-1]
+    @uidnext = @imapcon.responses["UIDNEXT"][-1]
     @highestmodseq = @imapcon.responses["HIGHESTMODSEQ"][-1]
     
     if (@folder_state.uidvalidity != @uidvalidity)
       STDOUT::puts "    UIDVALIDITY changed for #{folder}."
-      @highestmodseq = 0
+      @uidnext = @highestmodseq = 0
     end
+
+    return true
   rescue
-     @folder = @folder_state = @uidvalidity = @highestmodseq = nil
+     @folder = @folder_state = @uidvalidity = @uidnext = @highestmodseq = nil
      raise
   end
   
   def close_folder
+    #We _don't_ set highestmodseq here. This is left to process_messages
+    #because setting it to the current value of the folder is not
+    #always correct.
     @folder_state.uidvalidity = @uidvalidity
-    @folder_state.highestmodseq = @highestmodseq+1
+    @folder_state.uidnext = @uidnext
 
     #CLOSE does an implicit expunge. We want to avoid that, but
     #at the same time we want to make sure the folder is not
@@ -352,7 +394,7 @@ public
     @folder_state.save
     STDOUT::puts "  Finished processing #{@folder}"
   rescue
-     @folder = @folder_state = @uidvalidity = @highestmodseq = nil
+     @folder = @folder_state = @uidvalidity = @uidnext = @highestmodseq = nil
      raise
   end    
 end

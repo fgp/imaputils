@@ -5,7 +5,7 @@ SXCfg.use("imap-train")
 
 require 'lib/imapprocess'
 
-Net::IMAP.debug = true
+#Net::IMAP.debug = true
 
 imapproc = ImapProcessor::new
 imapproc.handler_miss_innocent = proc do |md|
