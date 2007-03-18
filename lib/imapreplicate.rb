@@ -157,7 +157,12 @@ class ImapFolderReplicator
     end
     msgs_src = query_msgs(@replicator.src, "Source")
     msgs_dst = query_msgs(@replicator.dst, "Destination")
-    added_msgs, updated_msgs, removed_msgs = *diff_msgs(msgs_src, msgs_dst, folder_flags(@folder_dst))
+    added_msgs, updated_msgs, removed_msgs = *diff_msgs(
+      msgs_src,
+      msgs_dst,
+      folder_flags_add(@folder_dst),
+      folder_flags_remove(@folder_dst)
+    )
     delete_msgs(removed_msgs) unless @dont_delete
     update_msgs(updated_msgs)
     add_msgs(added_msgs)
@@ -179,9 +184,22 @@ class ImapFolderReplicator
   
   private
 
-  def folder_flags(folder)
+  def folder_flags_add(folder)
     flags = Array::new
     SXCfg::Default.folders.flags.hash.each do |flag, folders|
+      next unless flag =~ /^\+(.*)$/
+      flag = $1
+      next unless (folders.include? folder) || (folders.include? "*")
+      flags << flag
+    end
+    flags
+  end
+
+  def folder_flags_remove(folder)
+    flags = Array::new
+    SXCfg::Default.folders.flags.hash.each do |flag, folders|
+      next unless flag =~ /^\-(.*)$/
+      flag = $1
       next unless (folders.include? folder) || (folders.include? "*")
       flags << flag
     end
@@ -306,7 +324,7 @@ class ImapFolderReplicator
   #we use that uid to update the msg. For updates there another little
   #subtility, namely that that flags (the hash key) are of course 
   #taken from the src msg.
-  def diff_msgs(msgs_src, msgs_dst, add_flags=[])
+  def diff_msgs(msgs_src, msgs_dst, add_flags=[], remove_flags=[])
     STDOUT::puts "  Computing differences between source and destination"
     msgs_src.sort! {|m1, m2| m1.msgid <=> m2.msgid}
     msgs_dst.sort! {|m1, m2| m1.msgid <=> m2.msgid}
@@ -324,10 +342,12 @@ class ImapFolderReplicator
         next
       end
 
-      #Pretend that the flags in add_flags are set on the src msg.
+      #Pretend that the flags in add_flags are set on the src msg,
+      #and flags in remove_flags are not
       msg_src = msgs_src[i_src].dup
       msg_src.flags = msg_src.flags.dup
       msg_src.flags.push(*add_flags)
+      msg_src.flags.reject! {|f| remove_flags.include? f}
       msg_dst = msgs_dst[i_dst].dup
 
       if (msg_src.msgid == msg_dst.msgid)
