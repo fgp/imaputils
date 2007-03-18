@@ -49,12 +49,16 @@ class ImapProcessor
     users.each do |user|
       iup = ImapUserProcessor::new(user)
       iup.batchsize = @batchsize if @batchsize
-      iup.handler_miss_innocent = @handler_miss_innocent if @handler_miss_innocent
-      iup.handler_miss_junk = @handler_miss_junk if @handler_miss_junk
-      iup.handler_corpus_innocent = @handler_corpus_innocent if @handler_corpus_innocent
-      iup.handler_corpus_junk = @handler_corpus_junk if @handler_corpus_junk
+      iup.handler_miss_innocent = ImapProcessor::handler(user, @handler_miss_innocent) if @handler_miss_innocent
+      iup.handler_miss_junk = ImapProcessor::handler(user, @handler_miss_junk) if @handler_miss_junk
+      iup.handler_corpus_innocent = ImapProcessor::handler(user, @handler_corpus_innocent) if @handler_corpus_innocent
+      iup.handler_corpus_junk = ImapProcessor::handler(user, @handler_corpus_junk) if @handler_corpus_junk
       iup.process_folders
     end
+  end
+
+  def self.handler(user, h)
+    proc {|md| h.call(user, md)}
   end
 end
 
@@ -81,7 +85,8 @@ private
     :classifiedinnocent,
     :classifiedjunk,
     :signature,
-    :subject
+    :subject,
+    :raw
   )
 
   #This class manages retrieval of message flags, and of updating
@@ -103,6 +108,10 @@ private
         next unless (v = a["BODY[HEADER.FIELDS (Subject)]"])
         next unless v =~ /^Subject:\s*([^\r\n]*)[\r\n]*$/i
         e.subject = $1
+      end,
+      "BODY.PEEK[]" => proc do |e, a|
+        next unless (v = a["BODY[]"])
+        e.raw = a["BODY[]"]
       end
     }
 
@@ -177,11 +186,12 @@ public
     class <<@imapcon
       include AutoPromoteExamineToSelect
     end
-    @nr_remaining = limit
-    @batchsize = 2048
+    @nr_remaining = limit || SXCfg::Default.limits.msgs_per_run.int
+    @batchsize = SXCfg::Default.limits.batchsize.int || 8
   end
   
   def process_folders
+    STDOUT::puts "Processing user #{@user}"
     folders = (@imapcon.list("", "*").collect do |mbox|
       next nil if mbox.attr.include? :Noselect
       mbox.name
@@ -284,8 +294,10 @@ public
         end
       end
     end
-
+    
     close_folder
+  rescue Exception => e
+    close_folder(e)
   end
 
   def process_junk_folder(folder)
@@ -318,6 +330,8 @@ public
     end
     
     close_folder
+  rescue Exception => e
+    close_folder(e)
   end
  
   #Opens a folder.
@@ -374,7 +388,14 @@ public
      raise
   end
   
-  def close_folder
+  def close_folder(error = nil)
+    #If @folder is nil, we just write an error message if error is set.
+    error_message = error.message.gsub(/\n/, "\n    ") if error
+    unless @folder
+      STDOUT::puts "  Error processing folder #{@folder}\n    #{msg}\n" if error
+      return
+    end
+      
     #We _don't_ set highestmodseq here. This is left to process_messages
     #because setting it to the current value of the folder is not
     #always correct.
@@ -392,9 +413,13 @@ public
     end
 
     @folder_state.save
-    STDOUT::puts "  Finished processing #{@folder}"
-  rescue
+    if error == nil
+      STDOUT::puts "  Finished processing #{@folder}"
+    else
+      msg = error.message.gsub(/\n/, "\n    ")
+      STDOUT::puts "  Error processing folder #{@folder}\n    #{msg}\n"
+    end
+  ensure
      @folder = @folder_state = @uidvalidity = @uidnext = @highestmodseq = nil
-     raise
   end    
 end
