@@ -2,6 +2,15 @@ folders:
   ignore:
     - <Folder to ignore>
     - <Folder to ignore>
+  flags:
+    <flag1>:
+      - <folder1 where flag1 will be set on msgs>
+      - <folder2 where flag1 will be set on msgs>
+    <flag2>:
+      - <folder1 where flag2 will be set on msgs>
+      - <folder2 where flag2 will be set on msgs>
+    <flag3>:
+      - *
 imap:
   src:
     server: <servername>

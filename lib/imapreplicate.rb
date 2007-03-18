@@ -157,16 +157,36 @@ class ImapFolderReplicator
     end
     msgs_src = query_msgs(@replicator.src, "Source")
     msgs_dst = query_msgs(@replicator.dst, "Destination")
-    added_msgs, updated_msgs, removed_msgs = *diff_msgs(msgs_src, msgs_dst)
+    added_msgs, updated_msgs, removed_msgs = *diff_msgs(msgs_src, msgs_dst, folder_flags(@folder_dst))
     delete_msgs(removed_msgs) unless @dont_delete
     update_msgs(updated_msgs)
     add_msgs(added_msgs)
-    @replicator.dst.examine(@folder_dst) #Reopen readonly, instead of close,
-                                         #to prevent expunge.
-    @replicator.src.close()
+
+    #CLOSE does an implicit expunge. We want to avoid that, but
+    #at the same time we want to make sure the folder is not
+    #selected anymore. We therefor send a bogus EXAMINE command,
+    #which according to the RFC should cause the folder to
+    #be unselected.
+    begin
+      @replicator.src.examine("")
+    rescue Net::IMAP::NoResponseError
+    end
+    begin
+      @replicator.dst.examine("")
+    rescue Net::IMAP::NoResponseError
+    end
   end
   
   private
+
+  def folder_flags(folder)
+    flags = Array::new
+    SXCfg::Default.folders.flags.hash.each do |flag, folders|
+      next unless (folders.include? folder) || (folders.include? "*")
+      flags << flag
+    end
+    flags
+  end
   
   def add_msgs(msgs)
     return if msgs.empty?
@@ -286,7 +306,7 @@ class ImapFolderReplicator
   #we use that uid to update the msg. For updates there another little
   #subtility, namely that that flags (the hash key) are of course 
   #taken from the src msg.
-  def diff_msgs(msgs_src, msgs_dst)
+  def diff_msgs(msgs_src, msgs_dst, add_flags=[])
     STDOUT::puts "  Computing differences between source and destination"
     msgs_src.sort! {|m1, m2| m1.msgid <=> m2.msgid}
     msgs_dst.sort! {|m1, m2| m1.msgid <=> m2.msgid}
@@ -299,27 +319,33 @@ class ImapFolderReplicator
     i_src, i_dst = 0,0
     while (i_src < msgs_src.length) && (i_dst < msgs_dst.length)
       #Skip messages with the same id as their predecessor
-      if (i_src > 0) && (msgs_src[i_src-1].msgid == msgs_src[i_src])
+      if (i_src > 0) && (msgs_src[i_src-1].msgid == msgs_src[i_src].msgid)
         i_src += 1
         next
       end
 
-      if (msgs_src[i_src].msgid == msgs_dst[i_dst].msgid)
+      #Pretend that the flags in add_flags are set on the src msg.
+      msg_src = msgs_src[i_src].dup
+      msg_src.flags = msg_src.flags.dup
+      msg_src.flags.push(*add_flags)
+      msg_dst = msgs_dst[i_dst].dup
+
+      if (msg_src.msgid == msg_dst.msgid)
         #Message exists on both sides
-        if (msgs_src[i_src].flags != msgs_dst[i_dst].flags)
+        if (msg_src.flags != msg_dst.flags)
           #Same message, different flags
-          updated_msgs[msgs_src[i_src].flags] ||= Array::new
-          updated_msgs[msgs_src[i_src].flags] << msgs_dst[i_dst]
+          updated_msgs[msg_src.flags] ||= Array::new
+          updated_msgs[msg_src.flags] << msg_dst
         end
         i_src += 1
         i_dst += 1
-      elsif (msgs_src[i_src].msgid < msgs_dst[i_dst].msgid)
+      elsif (msg_src.msgid < msg_dst.msgid)
         #Message is missing on destination
-        added_msgs << msgs_src[i_src]
+        added_msgs << msg_src
         i_src += 1
       else
         #Message was removed on source
-        removed_msgs << msgs_dst[i_dst]
+        removed_msgs << msg_dst
         i_dst += 1
       end
     end
