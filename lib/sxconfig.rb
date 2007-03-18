@@ -1,7 +1,7 @@
 require 'yaml'
 
 module SXCfg
-  CfgPrefix = "/etc/sx"
+  CfgPrefix = "/etc/imaputils"
   EnvPrefix = "SXCONFIG_"
 
   def self.use(app)
