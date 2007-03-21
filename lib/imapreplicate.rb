@@ -417,7 +417,9 @@ class ImapFolderReplicator
 
       if (msg_src.msgid == msg_dst.msgid)
         #Message exists on both sides
-        if (msg_src.flags != msg_dst.flags)
+        flags_src = msg_src.flags.sort {|a,b| a.to_s <=> b.to_s}
+        flags_dst = msg_dst.flags.sort {|a,b| a.to_s <=> b.to_s}
+        if (flags_src != flags_dst)
           #Same message, different flags
           updated_msgs[msg_src.flags] ||= Array::new
           updated_msgs[msg_src.flags] << msg_dst
