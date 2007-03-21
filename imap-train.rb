@@ -11,18 +11,22 @@ STDOUT.sync = true
 
 imapproc = ImapProcessor::new
 imapproc.handler_miss_innocent = proc do |user, md|
+  next if md.signature.nil? || md.signature.empty?
   puts "    MISS INNOCENT: #{md.signature} (#{md.uid}: #{md.subject})"
   DSPAM::miss_innocent(user, md.signature)
 end
 imapproc.handler_miss_junk = proc do |user, md|
+  next if md.signature.nil? || md.signature.empty?
   puts "    MISS JUNK: #{md.signature} (#{md.uid}: #{md.subject})"
   DSPAM::miss_junk(user, md.signature)
 end
 imapproc.handler_corpus_innocent = proc do |user, md|
+  next if md.raw.nil? || md.raw.empty?
   puts "    CORPUS INNOCENT: #{md.uid}: #{md.subject}"
   DSPAM::corpus_innocent(user, md.raw)
 end
 imapproc.handler_corpus_junk = proc do |user, md|
+  next if md.raw.nil? || md.raw.empty?
   puts "    CORPUS JUNK: #{md.uid}: #{md.subject}"
   DSPAM::corpus_junk(user, md.raw)
 end
