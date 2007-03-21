@@ -1,4 +1,4 @@
-#!/usr/bin/ruby1.8
+#!/sw/bin/ruby1.8
 require 'lib/sxconfig.rb'
 require 'lib/imapreplicate.rb'
 
@@ -22,4 +22,5 @@ SXCfg::Default.load(ARGV.first)
 STDOUT.sync = true
 
 replicator = ImapReplicator::new(srcuser, dstuser, srcpwd, dstpwd)
-replicator.replicate
+replicator.replicate_sieve
+replicator.replicate_mailbox

@@ -104,6 +104,18 @@ class SieveResponseError < Exception; end
 class ManageSieve
   SIEVE_PORT = 2000
 
+  # Returns the debug mode.
+  def self.debug
+    return @@debug
+  end
+
+  # Sets the debug mode.
+  def self.debug=(val)
+    return @@debug = val
+  end
+
+  @@debug = false
+
   attr_reader :host, :port, :user, :euser, :capabilities, :login_mechs
 
   # Create a new ManageSieve instance. The +info+ parameter is a hash with the
@@ -212,11 +224,9 @@ class ManageSieve
     else
       authenticator = Net::IMAPAuth::get_authenticator(@auth_mech)::new(@euser, @user, @password)
     end
-    resp = send_command("AUTHENTICATE", sieve_name(@auth_mech))
-    STDERR::puts "resp: #{resp}"
-    data = authenticator.process(resp)
-    s = [data].pack("m").gsub(/\n/, "")
-    send_command(sieve_name(s))
+    send_command("AUTHENTICATE", sieve_name(@auth_mech), false)
+    data = authenticator.process(get_response(true).unpack("m").first)
+    send_command(sieve_name([data].pack("m").gsub(/\n/, "")))
   end
 
   private
@@ -238,7 +248,9 @@ class ManageSieve
   private
   def get_line # :nodoc:
     begin
-      return @socket.readline.chomp
+      line = @socket.readline.chomp
+      STDERR::puts "S: #{line}" if @@debug
+      return line
     rescue EOFError => e
       raise SieveNetworkError, "Network error: #{e}"
     end
@@ -248,6 +260,7 @@ class ManageSieve
   def send_command(cmd, args=nil, wait_response=true) # :nodoc:
     cmd += ' ' + args if args
     begin
+      STDERR::puts "C: #{cmd}" if @@debug
       @socket.send(cmd + "\r\n", 0)
       resp = get_response if wait_response
     rescue SieveResponseError => e
@@ -270,7 +283,7 @@ class ManageSieve
       if m
         err, msg = m.captures
         size = msg.scan(/\{(\d+)\+?\}/).to_s.to_i
-        yield :error, @socket.read(size.to_i + 2) and next if size > 0
+        yield :error, get_data(size.to_i + 2) and next if size > 0
         yield :error, msg and next
       end
 
@@ -281,7 +294,7 @@ class ManageSieve
       # literal
       m = /\{(\d+)\+?\}/.match(data)
       size = m.captures.first.to_i
-      yield :literal, @socket.read(size + 2) and next if m  #  + 2 for \r\n
+      yield :literal, get_data(size + 2) and next if m  #  + 2 for \r\n
   
       # other
       yield :other, data
@@ -289,9 +302,17 @@ class ManageSieve
   end
 
   private
-  def get_response # :nodoc:
+  def get_data(size)
+    d = @socket.read(size)
+    STDERR::puts "S: #{d}" if @@debug
+    d
+  end
+
+  private
+  def get_response(just_one=false) # :nodoc:
     response = []
     parse_each_line do |flag, data|
+      return data if just_one
       case flag
       when :ok
         return response
@@ -300,8 +321,6 @@ class ManageSieve
       else
         response << data
       end
-      STDERR::puts "Found: #{response}"
-      response
     end
   end
 

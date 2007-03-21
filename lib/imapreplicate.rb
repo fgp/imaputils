@@ -8,17 +8,15 @@ class ImapReplicator
   ScanBatchSize = 1024
   AddBatchSize = 64
 
-  attr_reader :src, :dst, :delimiter_src, :delimiter_dst
+  attr_reader :src, :dst, :delimiter_src, :delimiter_dst, :src_sieve, :dst_sieve
   attr_accessor :batchsize
   
   def initialize(user_src, user_dst, pw_src = nil, pw_dst = nil)
-    @src = Net::IMAP::new(SXCfg::Default.imap.src.server.string)
-    @dst = Net::IMAP::new(SXCfg::Default.imap.dst.server.string)
     @dst_dont_delete = SXCfg::Default.imap.dst.dont_delete.bool
     if !pw_src
       pw_src = SXCfg::Default.imap.src.proxypwd.string
       if pw_src[0] == ?< then
-        pw_src = File::read(pw_src[1..-1])
+        @pw_src = File::read(pw_src[1..-1])
       end
     end
     if !pw_dst
@@ -27,44 +25,10 @@ class ImapReplicator
         pw_dst = File::read(pw_dst[1..-1])
       end
     end
-    authenticate(
-      @src,
-      SXCfg::Default.imap.src.mech.string,
-      user_src,
-      SXCfg::Default.imap.src.proxyusr.string,
-      pw_src
-    )
-    authenticate(
-      @dst,
-      SXCfg::Default.imap.dst.mech.string,
-      user_dst,
-      SXCfg::Default.imap.dst.proxyusr.string,
-      pw_dst
-    )
-    @src_sieve = ManageSieve::new(
-      :host => SXCfg::Default.imap.src.server.string,
-      :user => SXCfg::Default.imap.src.proxyusr.string,
-      :euser => user_src,
-      :password => pw_src,
-      :auth_mech => SXCfg::Default.imap.src.mech.string
-    )
-    @dst_sieve = ManageSieve::new(
-      :host => SXCfg::Default.imap.dst.server.string,
-      :user => SXCfg::Default.imap.dst.proxyusr.string,
-      :euser => user_dst,
-      :password => pw_dst,
-      :auth_mech => SXCfg::Default.imap.dst.mech.string
-    )
-
-    raise ServerError::new("Couldn't determine source mailbox hierachy delimiter.") if
-      ((r = @src.list("", "")).length < 1)
-    @delimiter_src = r.first.delim
-    raise ServerError::new("Couldn't determine destination mailbox hierachy delimiter.") if
-      ((r = @dst.list("", "")).length < 1)
-    @delimiter_dst = r.first.delim
+    @user_src, @user_dst, @pw_src, @pw_dst = user_src, user_dst, pw_src, pw_dst
   end
 
-  def authenticate(con, mech, authz_user, auth_user, password)
+  def authenticate_mailbox(con, mech, authz_user, auth_user, password)
     begin
       con.authenticate(
         mech,
@@ -87,8 +51,56 @@ class ImapReplicator
       end
     end
   end
+
+  def connect_mailboxes
+    @src = Net::IMAP::new(SXCfg::Default.imap.src.server.string)
+    @dst = Net::IMAP::new(SXCfg::Default.imap.dst.server.string)
+    authenticate_mailbox(
+      @src,
+      SXCfg::Default.imap.src.mech.string,
+      @user_src,
+      SXCfg::Default.imap.src.proxyusr.string,
+      @pw_src
+    )
+    authenticate_mailbox(
+      @dst,
+      SXCfg::Default.imap.dst.mech.string,
+      @user_dst,
+      SXCfg::Default.imap.dst.proxyusr.string,
+      @pw_dst
+    )
+
+    raise ServerError::new("Couldn't determine source mailbox hierachy delimiter.") if
+      ((r = @src.list("", "")).length < 1)
+    @delimiter_src = r.first.delim
+    raise ServerError::new("Couldn't determine destination mailbox hierachy delimiter.") if
+      ((r = @dst.list("", "")).length < 1)
+    @delimiter_dst = r.first.delim
+  end
+
+  def connect_sieves
+    return if @src_sieve && @dst_sieve
+
+    @src_sieve = ManageSieve::new(
+      :host => SXCfg::Default.imap.src.server.string,
+      :user => SXCfg::Default.imap.src.proxyusr.string,
+      :euser => @user_src,
+      :password => @pw_src,
+      :auth_mech => SXCfg::Default.imap.src.mech.string
+    )
+    @dst_sieve = ManageSieve::new(
+      :host => SXCfg::Default.imap.dst.server.string,
+      :user => SXCfg::Default.imap.dst.proxyusr.string,
+      :euser => @user_dst,
+      :password => @pw_dst,
+      :auth_mech => SXCfg::Default.imap.dst.mech.string
+    )
+  end
+    
   
-  def replicate
+  def replicate_mailbox
+    connect_mailboxes
+
     folders_src = @src.list("", "*").collect do |mbox|
       mbox.name  
     end
@@ -104,24 +116,37 @@ class ImapReplicator
       repl.replicate
       STDOUT::puts "Finished processing #{folder_src} -> #{folder_dst}"
     end
+  end
+
+  def replicate_sieve
+    connect_sieves
+
     STDOUT::puts "Processing sieve scripts"
-    SieveReplicator::new(self).replicate
+    SieveReplicator::new(self, @dst_dont_delete).replicate
     STDOUT::puts "Finished processing sieve scripts"
   end
 end
 
 class SieveReplicator
-  def initialize(repl)
-    @replicator = repl
+  def initialize(repl, dst_dont_delete = false)
+    @replicator, @dont_delete = repl, dst_dont_delete
   end
 
   def replicate
     src_scripts = Array::new
     @replicator.src_sieve.scripts do |name, status|
-      STDOUT::puts "Copying script #{name} (#{status == "ACTIVE" ? "Active" : "Inactive"})"
+      STDOUT::puts "  Copying script #{name} (#{status == "ACTIVE" ? "Active" : "Inactive"})"
       src_scripts << name
       @replicator.dst_sieve.put_script(name, @replicator.src_sieve.get_script(name))
       @replicator.dst_sieve.set_active(name) if status == "ACTIVE"
+    end
+    @replicator.dst_sieve.scripts do |name, status|
+      if src_scripts.include? name then
+        src_scripts.delete(name)
+      elsif !@dont_delete
+        STDOUT::puts "  Removing script #{name} from destination"
+        @replicator.dst_sieve.delete_script(name)
+      end
     end
   end
 end
