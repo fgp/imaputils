@@ -356,6 +356,7 @@ class ImapFolderReplicator
     STDOUT::puts "  #{tag}: Will query #{ids.length} messages in batches of #{ImapReplicator::ScanBatchSize}."
     STDOUT::write "    |"
     total = ids.length
+    broken_msgs = 0
     while !ids.empty?
       STDOUT::write "."
       ids_now = ids.slice!(0, [ids.length, ImapReplicator::ScanBatchSize].min)
@@ -364,6 +365,10 @@ class ImapFolderReplicator
         "FLAGS",
         "ENVELOPE"
       ]).each do |res|
+        if (!res.attr.has_key? "ENVELOPE") || (res.attr["ENVELOPE"].nil?)
+          broken_msgs += 1
+          next
+        end
         flags = (res.attr["FLAGS"].reject {|f| f == :Recent}).sort {|f1, f2| f1.hash <=> f2.hash}
         msgid = MsgId::new(res.attr["ENVELOPE"])
         msgs << Msg::new(res.attr["UID"], msgid, flags)
@@ -371,6 +376,7 @@ class ImapFolderReplicator
       write_percent(total - ids.length, total, ids_now.length)
     end
     STDOUT::puts "|"
+    STDERR::puts "  WARNING: Ignored #{broken_msgs} messages because no unique id could be generated" if broken_msgs > 0
     return msgs
   end
   
