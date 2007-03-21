@@ -1,4 +1,5 @@
 require 'lib/imap'
+require 'lib/managesieve'
 
 class ImapReplicator
   class ServerError < Exception
@@ -39,6 +40,20 @@ class ImapReplicator
       user_dst,
       SXCfg::Default.imap.dst.proxyusr.string,
       pw_dst
+    )
+    @src_sieve = ManageSieve::new(
+      :host => SXCfg::Default.imap.src.server.string,
+      :user => SXCfg::Default.imap.src.proxyusr.string,
+      :euser => user_src,
+      :password => pw_src,
+      :auth_mech => SXCfg::Default.imap.src.mech.string
+    )
+    @dst_sieve = ManageSieve::new(
+      :host => SXCfg::Default.imap.dst.server.string,
+      :user => SXCfg::Default.imap.dst.proxyusr.string,
+      :euser => user_dst,
+      :password => pw_dst,
+      :auth_mech => SXCfg::Default.imap.dst.mech.string
     )
 
     raise ServerError::new("Couldn't determine source mailbox hierachy delimiter.") if
@@ -88,6 +103,25 @@ class ImapReplicator
       STDOUT::puts "Processing folder #{folder_src} -> #{folder_dst}"
       repl.replicate
       STDOUT::puts "Finished processing #{folder_src} -> #{folder_dst}"
+    end
+    STDOUT::puts "Processing sieve scripts"
+    SieveReplicator::new(self).replicate
+    STDOUT::puts "Finished processing sieve scripts"
+  end
+end
+
+class SieveReplicator
+  def initialize(repl)
+    @replicator = repl
+  end
+
+  def replicate
+    src_scripts = Array::new
+    @replicator.src_sieve.scripts do |name, status|
+      STDOUT::puts "Copying script #{name} (#{status == "ACTIVE" ? "Active" : "Inactive"})"
+      src_scripts << name
+      @replicator.dst_sieve.put_script(name, @replicator.src_sieve.get_script(name))
+      @replicator.dst_sieve.set_active(name) if status == "ACTIVE"
     end
   end
 end
