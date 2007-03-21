@@ -7,6 +7,7 @@ require 'lib/imapprocess'
 require 'lib/dspam'
 
 #Net::IMAP.debug = true
+STDOUT.sync = true
 
 imapproc = ImapProcessor::new
 imapproc.handler_miss_innocent = proc do |user, md|
