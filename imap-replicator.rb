@@ -1,4 +1,4 @@
-#!/sw/bin/ruby1.8
+#!/usr/bin/ruby1.8
 require 'lib/sxconfig.rb'
 require 'lib/imapreplicate.rb'
 
