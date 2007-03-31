@@ -85,7 +85,7 @@ module Net
       if @authz_user
         @identity = @authz_user + "\000" + @auth_user
       else
-        @identity = @auth_user
+        @identity = "\000" + @auth_user
       end
     end
   end
