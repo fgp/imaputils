@@ -340,8 +340,10 @@ module Net
       send_command("AUTHENTICATE", auth_type) do |resp|
         if resp.instance_of?(ContinuationRequest)
           data = authenticator.process(resp.data.text.unpack("m")[0])
-          s = [data].pack("m").gsub(/\n/, "")
-          send_string_data(s)
+          if data
+            s = [data].pack("m").gsub(/\n/, "")
+            send_string_data(s)
+          end
           put_string(CRLF)
         end
       end

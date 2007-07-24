@@ -76,16 +76,11 @@ module Net
     #   @identity: @authz_user\000@auth_user, or @authuser
     def initialize(authzuser_or_authuser, authuser_or_password, password = nil)
       if (password)
-        @authz_user, @auth_user, @password = 
-        authzuser_or_authuser, authuser_or_password, password
+        @proxy_auth, @authz_user, @auth_user, @password = 
+        true, authzuser_or_authuser, authuser_or_password, password
       else
-        @authz_user, @auth_user, @password =
-        nil, authzuser_or_authuser, authuser_or_password
-      end
-      if @authz_user
-        @identity = @authz_user + "\000" + @auth_user
-      else
-        @identity = "\000" + @auth_user
+        @proxy_auth, @authz_user, @auth_user, @password =
+        false, "", authzuser_or_authuser, authuser_or_password
       end
     end
   end
@@ -94,15 +89,102 @@ module Net
   # authentication. See #authenticate().
   class PlainAuthenticator < ProxyAuthenticator
     def process(data)
-      return "#{@identity}\000#{@password}"
+      return "#{@authz_user}\000#{@auth_user}\000#{@password}"
     end
   end
   Net::IMAPAuth.add_authenticator "PLAIN", PlainAuthenticator
 
   class DigestMD5Authenticator < ProxyAuthenticator
+    class InvalidResponse < Exception
+    end
+  
     def process(data)
-      STDERR::puts data.inspect
-      raise "STOP"
+      challenge = parse(data)
+      return nil if challenge.include? :rspauth
+
+      STDERR::puts "DECODED: #{challenge.inspect}"
+      raise InvalidResponse::new("Invalid DIGEST-MD5 response, no nonce") unless
+        challenge.has_key? :nonce
+      raise InvalidResponse::new("Invalid DIGEST-MD5 response, no qop") unless
+        challenge.has_key? :qop
+      raise InvalidResponse::new("Invalid DIGEST-MD5 response, no algorithm") unless
+        challenge.has_key? :algorithm
+      raise InvalidResponse::new("Invalid DIGEST-MD5 response, server requests encryption") unless
+        challenge[:qop].include? :auth
+      raise InvalidResponse::new("Invalid DIGEST-MD5 response, algorithm invalid") unless
+        challenge[:algorithm] == "md5-sess"
+ 
+      response = {
+        :realm => challenge[:realm] || "none",
+        :nonce => challenge[:nonce],
+        :cnonce => Digest::MD5.hexdigest(Time.new.to_f.to_s),
+        :nc => "00000001",
+        :qop => "auth",
+	:"digest-uri" => "imap/#{@host}/#{@host}",
+        :username => @auth_user
+      }
+      response[:authzid] = @authz_user if @proxy_auth
+      response[:response] = calculate_response(response)
+      
+      synthesize(response)
+    end
+
+    #See RFC2831 if you want to understand this
+    def calculate_response(response)
+      a1_1 = h("#{@auth_user}:#{response[:realm]}:#{@password}")
+      a1 = if @proxy_auth then
+        "#{a1_1}:#{response[:nonce]}:#{response[:cnonce]}:#{@authz_user}"
+      else
+        "#{a1_1}:#{response[:nonce]}:#{response[:cnonce]}"
+      end
+      
+      a2 = "AUTHENTICATE:#{response[:'digest-uri']}"
+
+      hexh("#{hexh(a1)}:#{response[:nonce]}:#{response[:nc]}:#{response[:cnonce]}:#{response[:qop]}:#{hexh(a2)}")
+    end
+    
+    #See RFC2831, it defines those functions
+    def h(s); Digest::MD5.digest(s); end
+    def hexh(s); Digest::MD5.hexdigest(s); end
+    
+    def synthesize(response)
+      s = []
+      response.each do |k,v|
+        v = case k
+          when :nc then v.to_s
+          else "\"#{v.to_s}\""
+        end
+        s << "#{k.to_s}=#{v}"
+      end
+      s.join(",")
+    end
+                                          
+    def parse(str)
+       r = Hash::new
+       while !(str =~ /^\s*$/)
+         case str
+           when /^(\s*([^\s=]+)\s*=([^",\s]*)\s*(,|$))/
+             p, k, v = $1, $2.intern, $3
+           when /^(\s*([^\s=]+)\s*=\s*"(([^"]|(\\"))*)"\s*(,|$))/
+             p, k, v = $1, $2.intern, $3
+             v = v.gsub(/\\(.)/) {$1}
+           else
+             raise "Couldn't parse response: #{str}"
+         end
+         v = case k
+            when :qop, :cipher then v.split(/,/).collect {|s| s.intern}
+            when :maxbuf then v.to_i
+            when :stale then (v == "true" ? true : false)
+            else v
+         end
+         case k
+           when :realm then r[k] = (r[k] || []) || [v]
+           else r[k] = v
+         end
+         r[k] = v
+         str = str[(p.length)..-1]
+       end
+       return r
     end
   end    
   Net::IMAPAuth.add_authenticator "DIGEST-MD5", DigestMD5Authenticator
