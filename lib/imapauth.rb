@@ -102,7 +102,6 @@ module Net
       challenge = parse(data)
       return nil if challenge.include? :rspauth
 
-      STDERR::puts "DECODED: #{challenge.inspect}"
       raise InvalidResponse::new("Invalid DIGEST-MD5 response, no nonce") unless
         challenge.has_key? :nonce
       raise InvalidResponse::new("Invalid DIGEST-MD5 response, no qop") unless
