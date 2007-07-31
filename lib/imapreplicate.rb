@@ -76,6 +76,9 @@ class ImapReplicator
     raise ServerError::new("Couldn't determine destination mailbox hierachy delimiter.") if
       ((r = @dst.list("", "")).length < 1)
     @delimiter_dst = r.first.delim
+    
+    @prefix_src = SXCfg::Default.imap.src.prefix.string || ""
+    @prefix_dst = SXCfg::Default.imap.dst.prefix.string || ""
   end
 
   def connect_sieves
@@ -101,16 +104,38 @@ class ImapReplicator
   def replicate_mailbox
     connect_mailboxes
 
+    @mailbox_map = Hash::new
     folders_src = @src.list("", "*").collect do |mbox|
       mbox.name  
     end
+    
     folders_src.each do |folder_src|
-      next if SXCfg::Default.folders.ignore.array.include? folder_src
-      folder_dst = if @delimiter_src != @delimiter_dst then
-        folder_src.tr(@delimiter_dst, "_").tr(@delimiter_src, @delimiter_dst)
+      skip = true if SXCfg::Default.folders.ignore.array.include? folder_src
+    
+      folder_dst = if folder_src =~ /^#{Regexp::escape(@prefix_src + @delimiter_src)}([^#{Regexp::escape(@delimiter_src)}].*)$/
+        removed_prefix = true
+        $1
       else
+        removed_prefix = false
         folder_src
       end
+
+      folder_dst = if @delimiter_src != @delimiter_dst then
+        folder_dst.tr(@delimiter_dst, "_").tr(@delimiter_src, @delimiter_dst)
+      else
+        folder_dst
+      end
+
+      folder_dst = if removed_prefix && !@prefix_dst.empty? then
+        @prefix_dst + @delimiter_dst + folder_dst
+      else
+        folder_dst
+      end
+        
+      @mailbox_map[folder_src] = folder_dst
+      
+      next if skip
+      
       repl = ImapFolderReplicator::new(self, folder_src, folder_dst, @dst_dont_delete)
       STDOUT::puts "Processing folder #{folder_src} -> #{folder_dst}"
       repl.replicate

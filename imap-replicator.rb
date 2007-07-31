@@ -21,6 +21,7 @@ end
 SXCfg::Default.load(ARGV.first)
 STDOUT.sync = true
 
+Net::IMAP::Debug = true
 replicator = ImapReplicator::new(srcuser, dstuser, srcpwd, dstpwd)
-replicator.replicate_sieve
+#replicator.replicate_sieve
 replicator.replicate_mailbox

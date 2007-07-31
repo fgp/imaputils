@@ -14,4 +14,5 @@ installer.add_lib "lib/dspam.rb"
 installer.add_cfg "imap-train.cfg"
 installer.add_cfg "imap-replicator.cfg.template"
 installer.add_cfg "rivendell.cfg"
+installer.add_cfg "mail.brumma.com.cfg"
 installer.install
