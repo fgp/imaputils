@@ -84,20 +84,47 @@ class ImapReplicator
   def connect_sieves
     return if @src_sieve && @dst_sieve
 
-    @src_sieve = ManageSieve::new(
-      :host => SXCfg::Default.imap.src.server.string,
-      :user => SXCfg::Default.imap.src.proxyusr.string,
-      :euser => @user_src,
-      :password => @pw_src,
-      :auth_mech => SXCfg::Default.imap.src.mech.string
-    )
-    @dst_sieve = ManageSieve::new(
-      :host => SXCfg::Default.imap.dst.server.string,
-      :user => SXCfg::Default.imap.dst.proxyusr.string,
-      :euser => @user_dst,
-      :password => @pw_dst,
-      :auth_mech => SXCfg::Default.imap.dst.mech.string
-    )
+    @src_sieve = begin
+      ManageSieve::new(
+        :host => SXCfg::Default.imap.src.server.string,
+        :user => SXCfg::Default.imap.src.proxyusr.string,
+        :euser => @user_src,
+        :password => @pw_src,
+        :auth_mech => SXCfg::Default.imap.src.mech.string
+      )
+    rescue SieveAuthError, SieveCommandError
+      if SXCfg::Default.imap.src.proxyusr.string
+        STDOUT::puts "    Failed to authorize as #{@user_src} by authenticating as #{SXCfg::Default.imap.src.proxyusr.string} via #{SXCfg::Default.imap.src.mech.string}"
+        raise
+      else
+        STDOUT::puts "    Failed to authenticate as #{@user_src} via #{SXCfg::Default.imap.src.mech.string}"
+        raise
+      end
+    rescue Exception => e
+      STDOUT::puts "    Failed to connect to #{SXCfg::Default.imap.src.server.string}: #{e.message} (#{e.class.name})"
+      raise
+    end
+    
+    @dst_sieve = begin
+      ManageSieve::new(
+        :host => SXCfg::Default.imap.dst.server.string,
+        :user => SXCfg::Default.imap.dst.proxyusr.string,
+        :euser => @user_dst,
+        :password => @pw_dst,
+        :auth_mech => SXCfg::Default.imap.dst.mech.string
+      )
+    rescue SieveAuthError, SieveCommandError
+      if SXCfg::Default.imap.dst.proxyusr.string
+        STDOUT::puts "    Failed to authorize as #{@user_dst} by authenticating as #{SXCfg::Default.imap.dst.proxyusr.string} via #{SXCfg::Default.imap.dst.mech.string}"
+        raise
+      else
+        STDOUT::puts "    Failed to authenticate as #{@user_dst} via #{SXCfg::Default.imap.dst.mech.string}"
+        raise
+      end
+    rescue Exception => e
+      STDOUT::puts "    Failed to connect to #{SXCfg::Default.imap.dst.server.string}: #{e.message} (#{e.class.name})"
+      raise
+    end
   end
     
   
