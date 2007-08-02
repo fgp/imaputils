@@ -43,10 +43,10 @@ class ImapReplicator
       )
     rescue Net::IMAP::NoResponseError
       if auth_user
-        STDOUT::puts "Failed to authorize as #{authz_user} by authenticating as #{auth_user} via #{mech}"
+        STDOUT::puts "    Failed to authorize as #{authz_user} by authenticating as #{auth_user} via #{mech}"
         raise
       else
-        STDOUT::puts "Failed to authenticate as #{authz_user} via #{mech}"
+        STDOUT::puts "    Failed to authenticate as #{authz_user} via #{mech}"
         raise
       end
     end
@@ -102,6 +102,7 @@ class ImapReplicator
     
   
   def replicate_mailbox
+    STDOUT::puts "  Processing mailbox"
     connect_mailboxes
 
     @mailbox_map = Hash::new
@@ -137,18 +138,18 @@ class ImapReplicator
       next if skip
       
       repl = ImapFolderReplicator::new(self, folder_src, folder_dst, @dst_dont_delete)
-      STDOUT::puts "Processing folder #{folder_src} -> #{folder_dst}"
+      STDOUT::puts "    Processing folder #{folder_src} -> #{folder_dst}"
       repl.replicate
-      STDOUT::puts "Finished processing #{folder_src} -> #{folder_dst}"
+      STDOUT::puts "    Finished processing #{folder_src} -> #{folder_dst}"
     end
+    STDOUT::puts "  Finished processing mailbox"
   end
 
   def replicate_sieve
+    STDOUT::puts "  Processing sieve scripts"
     connect_sieves
-
-    STDOUT::puts "Processing sieve scripts"
     SieveReplicator::new(self, @dst_dont_delete).replicate
-    STDOUT::puts "Finished processing sieve scripts"
+    STDOUT::puts "  Finished processing sieve scripts"
   end
 end
 
@@ -160,7 +161,7 @@ class SieveReplicator
   def replicate
     src_scripts = Array::new
     @replicator.src_sieve.scripts do |name, status|
-      STDOUT::puts "  Copying script #{name} (#{status == "ACTIVE" ? "Active" : "Inactive"})"
+      STDOUT::puts "    Copying script #{name} (#{status == "ACTIVE" ? "Active" : "Inactive"})"
       src_scripts << name
       @replicator.dst_sieve.put_script(name, @replicator.src_sieve.get_script(name))
       @replicator.dst_sieve.set_active(name) if status == "ACTIVE"
@@ -169,7 +170,7 @@ class SieveReplicator
       if src_scripts.include? name then
         src_scripts.delete(name)
       elsif !@dont_delete
-        STDOUT::puts "  Removing script #{name} from destination"
+        STDOUT::puts "    Removing script #{name} from destination"
         @replicator.dst_sieve.delete_script(name)
       end
     end
@@ -293,8 +294,8 @@ class ImapFolderReplicator
   def add_msgs(msgs)
     return if msgs.empty?
 
-    STDOUT::puts "  Destination: Will add #{msgs.length} messages in batches of #{ImapReplicator::AddBatchSize}."
-    STDOUT::write "    |"
+    STDOUT::puts "      Destination: Will add #{msgs.length} messages in batches of #{ImapReplicator::AddBatchSize}."
+    STDOUT::write "        |"
     total = msgs.length
     while !msgs.empty?
       STDOUT::write "."
@@ -331,13 +332,13 @@ class ImapFolderReplicator
   def update_msgs(msgs)
     return if msgs.empty?
 
-    STDOUT::puts "  Destination: Will update #{msgs.values.flatten.length} messages to #{msgs.keys.length} different states."
+    STDOUT::puts "      Destination: Will update #{msgs.values.flatten.length} messages to #{msgs.keys.length} different states."
     msgs.each do |flags, msgs|
       next if msgs.empty?
 
       msgs = msgs.dup
-      STDOUT::puts "    Will update #{msgs.length} messages to state [#{flags.join(', ')}] in batches of #{ImapReplicator::ScanBatchSize}"
-      STDOUT::write "      |"
+      STDOUT::puts "        Will update #{msgs.length} messages to state [#{flags.join(', ')}] in batches of #{ImapReplicator::ScanBatchSize}"
+      STDOUT::write "          |"
       total = msgs.length
       while !msgs.empty?
         STDOUT::write "."
@@ -356,8 +357,8 @@ class ImapFolderReplicator
   def delete_msgs(msgs)
     return if msgs.empty?
 
-    STDOUT::puts "  Destination: Will delete #{msgs.length} messages in batches #{ImapReplicator::ScanBatchSize}."
-    STDOUT::write "    |"
+    STDOUT::puts "      Destination: Will delete #{msgs.length} messages in batches #{ImapReplicator::ScanBatchSize}."
+    STDOUT::write "      |"
     total = msgs.length
     while !msgs.empty?
       STDOUT::write "."
@@ -378,8 +379,8 @@ class ImapFolderReplicator
     ids = imapcon.search("ALL")
     return msgs if ids.empty?
 
-    STDOUT::puts "  #{tag}: Will query #{ids.length} messages in batches of #{ImapReplicator::ScanBatchSize}."
-    STDOUT::write "    |"
+    STDOUT::puts "      #{tag}: Will query #{ids.length} messages in batches of #{ImapReplicator::ScanBatchSize}."
+    STDOUT::write "        |"
     total = ids.length
     broken_msgs = 0
     while !ids.empty?
@@ -401,7 +402,7 @@ class ImapFolderReplicator
       write_percent(total - ids.length, total, ids_now.length)
     end
     STDOUT::puts "|"
-    STDERR::puts "  WARNING: Ignored #{broken_msgs} messages because no unique id could be generated" if broken_msgs > 0
+    STDERR::puts "      WARNING: Ignored #{broken_msgs} messages because no unique id could be generated" if broken_msgs > 0
     return msgs
   end
   
@@ -415,7 +416,7 @@ class ImapFolderReplicator
   #subtility, namely that that flags (the hash key) are of course 
   #taken from the src msg.
   def diff_msgs(msgs_src, msgs_dst, add_flags=[], remove_flags=[])
-    STDOUT::puts "  Computing differences between source and destination"
+    STDOUT::puts "      Computing differences between source and destination"
     msgs_src.sort! {|m1, m2| m1.msgid <=> m2.msgid}
     msgs_dst.sort! {|m1, m2| m1.msgid <=> m2.msgid}
     
@@ -469,7 +470,7 @@ class ImapFolderReplicator
       added_msgs.concat(msgs_src[i_src..-1])
     end
 
-    STDOUT::puts "  #{added_msgs.length} messages added, #{updated_msgs.values.flatten.length} updated and #{removed_msgs.length} removed."
+    STDOUT::puts "      #{added_msgs.length} messages added, #{updated_msgs.values.flatten.length} updated and #{removed_msgs.length} removed."
     return [added_msgs, updated_msgs, removed_msgs]    
   end
 
