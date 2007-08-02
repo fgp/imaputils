@@ -336,7 +336,7 @@ module Net
     #
     # A Net::IMAP::NoResponseError is raised if authentication fails.
     def authenticate(auth_type, *args)
-      authenticator = IMAPAuth::get_authenticator(auth_type)::new(*args)
+      authenticator = IMAPAuth::get_authenticator(auth_type)::new("imap", @host, *args)
       send_command("AUTHENTICATE", auth_type) do |resp|
         if resp.instance_of?(ContinuationRequest)
           data = authenticator.process(resp.data.text.unpack("m")[0])

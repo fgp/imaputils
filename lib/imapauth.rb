@@ -35,7 +35,8 @@ module Net
       return @user + " " + digest
     end
 
-    def initialize(user, password)
+    def initialize(service, host, user, password)
+      @service, @host = service, host
       @user = user
       @password = password
     end
@@ -74,7 +75,8 @@ module Net
     #   @auth_user:  authentication user
     #   @password:   password of auth_user
     #   @identity: @authz_user\000@auth_user, or @authuser
-    def initialize(authzuser_or_authuser, authuser_or_password, password = nil)
+    def initialize(service, host, authzuser_or_authuser, authuser_or_password, password = nil)
+      @service, @host = service, host
       if (password)
         @proxy_auth, @authz_user, @auth_user, @password = 
         true, authzuser_or_authuser, authuser_or_password, password
@@ -119,7 +121,7 @@ module Net
         :cnonce => Digest::MD5.hexdigest(Time.new.to_f.to_s),
         :nc => "00000001",
         :qop => "auth",
-	:"digest-uri" => "imap/#{@host}/#{@host}",
+	:"digest-uri" => "#{@service}/#{@host}/#{@host}",
         :username => @auth_user
       }
       response[:authzid] = @authz_user if @proxy_auth

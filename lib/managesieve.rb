@@ -220,9 +220,9 @@ class ManageSieve
       raise SieveAuthError, "Server doesn't allow #{@auth_mech} authentication"
     end
     if (@euser == @user) || (@user.nil?)
-      authenticator = Net::IMAPAuth::get_authenticator(@auth_mech)::new(@euser, @password)
+      authenticator = Net::IMAPAuth::get_authenticator(@auth_mech)::new("sieve", @host, @euser, @password)
     else
-      authenticator = Net::IMAPAuth::get_authenticator(@auth_mech)::new(@euser, @user, @password)
+      authenticator = Net::IMAPAuth::get_authenticator(@auth_mech)::new("sieve", @host, @euser, @user, @password)
     end
     send_command("AUTHENTICATE", sieve_name(@auth_mech), false)
     data = authenticator.process(get_response(true).unpack("m").first)
