@@ -79,6 +79,40 @@ class ImapReplicator
     
     @prefix_src = SXCfg::Default.imap.src.prefix.string || ""
     @prefix_dst = SXCfg::Default.imap.dst.prefix.string || ""
+    
+    #Start one thread for each connection, the periodically calls noop
+    #This prevents the server from closing the connection because of
+    #inactivity.
+    @src_keepalive = Thread::new do
+      i = 0
+      while @src
+        begin
+          @src.noop() if i % 10 == 0
+          i = (i + 1) % 10
+          Kernel::sleep(1)
+        rescue Exception
+        end
+      end
+    end
+
+    @dst_keepalive = Thread::new do
+      i = 0
+      while @dst
+        begin
+          @dst.noop() if i % 10 == 0
+          i = (i + 1) % 10
+          Kernel::sleep(1)
+        rescue Exception
+        end
+      end
+    end
+  end
+  
+  def disconnect_mailboxes
+    src, @src = @src, nil
+    dst, @dst = @dst, nil
+    @src_keepalive.join; @dst_keepalive.join
+    src.disconnect; dst.disconnect
   end
 
   def connect_sieves
@@ -126,8 +160,12 @@ class ImapReplicator
       raise
     end
   end
-    
   
+  def disconnect_sieves
+    @src_sieve.logout
+    @dst_sieve.logout
+  end
+    
   def replicate_mailbox
     STDOUT::puts "  Processing mailbox"
     connect_mailboxes
@@ -138,7 +176,10 @@ class ImapReplicator
     end
     
     folders_src.each do |folder_src|
-      skip = true if SXCfg::Default.folders.ignore.array.include? folder_src
+      skip = false
+      SXCfg::Default.folders.ignore.array.each do |ign|
+        skip = true if Regexp::new(ign) =~ folder_src
+      end
     
       folder_dst = if folder_src =~ /^#{Regexp::escape(@prefix_src + @delimiter_src)}([^#{Regexp::escape(@delimiter_src)}].*)$/
         removed_prefix = true
@@ -170,6 +211,8 @@ class ImapReplicator
       STDOUT::puts "    Finished processing #{folder_src} -> #{folder_dst}"
     end
     STDOUT::puts "  Finished processing mailbox"
+  ensure
+    disconnect_mailboxes
   end
 
   def replicate_sieve
@@ -177,6 +220,8 @@ class ImapReplicator
     connect_sieves
     SieveReplicator::new(self, @dst_dont_delete).replicate
     STDOUT::puts "  Finished processing sieve scripts"
+  ensure
+    disconnect_sieves
   end
 end
 
@@ -345,8 +390,8 @@ class ImapFolderReplicator
           STDOUT::puts "--------------------------------------------------------------------------------"
           STDOUT::puts "FLAGS: #{flags.inspect}"
           STDOUT::puts "INTERNALDATE: #{date}"
-          STDOUT::puts "BODY:"
-          STDOUT::puts msg
+          STDOUT::puts "BODY (Limited to 5k bytes):"
+          STDOUT::puts msg[0..(5*1024)]
           STDOUT::puts "--------------------------------------------------------------------------------"
         end
         raise
