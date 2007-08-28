@@ -15,6 +15,7 @@
 
 require "socket"
 require "monitor"
+require "thread"
 require "digest/md5"
 begin
   require "openssl"
@@ -199,7 +200,6 @@ module Net
   #    Unicode", RFC 2152, May 1997.
   #
   class IMAP
-    include MonitorMixin
     if defined?(OpenSSL)
       include OpenSSL
       include SSL
@@ -293,8 +293,8 @@ module Net
     # a certain capability is supported by a server before
     # using it.
     def capability
-      synchronize do
-        send_command("CAPABILITY")
+      @send_command_mutex.synchronize do
+        send_command_unlocked("CAPABILITY")
         return @responses.delete("CAPABILITY")[-1]
       end
     end
@@ -372,9 +372,9 @@ module Net
     # A Net::IMAP::NoResponseError is raised if the mailbox does not
     # exist or is for some reason non-selectable.
     def select(mailbox, *parameters)
-      synchronize do
+      @send_command_mutex.synchronize do
         @responses.clear
-        send_command("SELECT", mailbox, *(parameters.empty? ? [] : [parameters]))
+        send_command_unlocked("SELECT", mailbox, *(parameters.empty? ? [] : [parameters]))
       end
     end
 
@@ -385,9 +385,9 @@ module Net
     # A Net::IMAP::NoResponseError is raised if the mailbox does not
     # exist or is for some reason non-examinable.
     def examine(mailbox, *parameters)
-      synchronize do
+      @send_command_mutex.synchronize do
         @responses.clear
-        send_command("EXAMINE", mailbox, *(parameters.empty? ? [] : [parameters]))
+        send_command_unlocked("EXAMINE", mailbox, *(parameters.empty? ? [] : [parameters]))
       end
     end
 
@@ -462,8 +462,8 @@ module Net
     #        #<Net::IMAP::MailboxList attr=[:Noinferiors, :Marked], delim="/", name="foo/bar">, \\ 
     #        #<Net::IMAP::MailboxList attr=[:Noinferiors], delim="/", name="foo/baz">]
     def list(refname, mailbox)
-      synchronize do
-        send_command("LIST", refname, mailbox)
+      @send_command_mutex.synchronize do
+        send_command_unlocked("LIST", refname, mailbox)
         return @responses.delete("LIST")
       end
     end
@@ -473,8 +473,8 @@ module Net
     # If mailbox exists, returns an array containing objects of
     # Net::IMAP::MailboxQuotaRoot and Net::IMAP::MailboxQuota.
     def getquotaroot(mailbox)
-      synchronize do
-        send_command("GETQUOTAROOT", mailbox)
+      @send_command_mutex.synchronize do
+        send_command_unlocked("GETQUOTAROOT", mailbox)
         result = []
         result.concat(@responses.delete("QUOTAROOT"))
         result.concat(@responses.delete("QUOTA"))
@@ -487,8 +487,8 @@ module Net
     # Net::IMAP::MailboxQuota object is returned.  This
     # command generally is only available to server admin.
     def getquota(mailbox)
-      synchronize do
-        send_command("GETQUOTA", mailbox)
+      @send_command_mutex.synchronize do
+        send_command_unlocked("GETQUOTA", mailbox)
         return @responses.delete("QUOTA")
       end
     end
@@ -523,8 +523,8 @@ module Net
     # If this mailbox exists, an array containing objects of
     # Net::IMAP::MailboxACLItem will be returned.
     def getacl(mailbox)
-      synchronize do
-        send_command("GETACL", mailbox)
+      @send_command_mutex.synchronize do
+        send_command_unlocked("GETACL", mailbox)
         return @responses.delete("ACL")[-1]
       end
     end
@@ -535,8 +535,8 @@ module Net
     # for #list().
     # The return value is an array of +Net::IMAP::MailboxList+.
     def lsub(refname, mailbox)
-      synchronize do
-        send_command("LSUB", refname, mailbox)
+      @send_command_mutex.synchronize do
+        send_command_unlocked("LSUB", refname, mailbox)
         return @responses.delete("LSUB")
       end
     end
@@ -558,15 +558,15 @@ module Net
     # for +mailbox+ cannot be returned, for instance because it
     # does not exist.
     def status(mailbox, attr)
-      synchronize do
-        send_command("STATUS", mailbox, attr)
+      @send_command_mutex.synchronize do
+        send_command_unlocked("STATUS", mailbox, attr)
         return @responses.delete("STATUS")[-1].attr
       end
     end
 
     def setannotation(mailbox, key, value)
-      synchronize do
-        send_command("SETANNOTATION",
+      @send_command_mutex.synchronize do
+        send_command_unlocked("SETANNOTATION",
           mailbox,
           QuotedString::new(key),
           [QuotedString::new("value.shared"), QuotedString::new(value)]
@@ -642,16 +642,16 @@ module Net
     # selected mailbox all messages that have the \Deleted flag set, and
     # that are included in the uid set given.
     def uid_expunge(set)
-      synchronize do
-        send_command("UID EXPUNGE", MessageSet.new(set))
+      @send_command_mutex.synchronize do
+        send_command_unlocked("UID EXPUNGE", MessageSet.new(set))
       end
     end
 
     # Sends a EXPUNGE command to permanently remove from the currently
     # selected mailbox all messages that have the \Deleted flag set.
     def expunge
-      synchronize do
-        send_command("EXPUNGE")
+      @send_command_mutex.synchronize do
+        send_command_unlocked("EXPUNGE")
         return @responses.delete("EXPUNGE")
       end
     end
@@ -875,6 +875,17 @@ module Net
     CRLF = "\r\n"      # :nodoc:
     PORT = 143         # :nodoc:
 
+    @@next_cid = 1
+    @@cid_mutex = Mutex::new
+    
+    def self.new_cid
+      @@cid_mutex.synchronize do
+        cid = @@next_cid
+        @@next_cid += 1
+        cid
+      end
+    end
+
     @@debug = false
     @@authenticators = {}
 
@@ -899,6 +910,7 @@ module Net
     #                               immediately said goodbye to us.
     def initialize(host, port = PORT, usessl = false, certs = nil, verify = false)
       super()
+      @cid = IMAP::new_cid
       @host = host
       @port = port
       @tag_prefix = "RUBY"
@@ -927,8 +939,6 @@ module Net
       @responses = Hash.new([].freeze)
       @tagged_responses = {}
       @response_handlers = []
-      @tagged_response_arrival = new_cond
-      @continuation_request_arrival = new_cond
       @logout_command_tag = nil
       @debug_output_bol = true
 
@@ -937,6 +947,10 @@ module Net
         @sock.close
         raise ByeResponseError, @greeting.raw_data
       end
+
+      @send_command_mutex = Mutex::new
+      @receive_response_mutex = Mutex::new
+      @receive_response_cond = ConditionVariable::new
 
       @client_thread = Thread.current
       @receiver_thread = Thread.start {
@@ -955,11 +969,12 @@ module Net
         end
         break unless resp
         begin
-          synchronize do
+          @receive_response_mutex.synchronize do
             case resp
             when TaggedResponse
               @tagged_responses[resp.tag] = resp
-              @tagged_response_arrival.broadcast
+              @stop_sending_command = true if resp.name =~ /\A(?:NO)\z/ni
+              @receive_response_cond.broadcast
               if resp.tag == @logout_command_tag
                 return
               end
@@ -974,7 +989,8 @@ module Net
                 raise ByeResponseError, resp.raw_data
               end
             when ContinuationRequest
-              @continuation_request_arrival.signal
+              @received_continuation_request = true
+              @receive_response_cond.broadcast
             end
             @response_handlers.each do |handler|
               handler.call(resp)
@@ -987,10 +1003,12 @@ module Net
     end
 
     def get_tagged_response(tag, cmd)
-      until @tagged_responses.key?(tag)
-        @tagged_response_arrival.wait
+      resp = @receive_response_mutex.synchronize do
+        until @tagged_responses.key?(tag)
+          @receive_response_cond.wait(@receive_response_mutex)
+        end
+        @tagged_responses.delete(tag)
       end
-      resp = @tagged_responses.delete(tag)
       case resp.name
       when /\A(?:NO)\z/ni
         raise NoResponseError, resp.data.text
@@ -1016,7 +1034,7 @@ module Net
       end
       return nil if buff.length == 0
       if @@debug
-        $stderr.print(buff.gsub(/^/n, "S: "))
+        $stderr.print(buff.gsub(/^/n, "S#{@cid}: "))
       end
       return @parser.parse(buff)
     end
@@ -1029,26 +1047,35 @@ module Net
     end
 
     def send_command(cmd, *args, &block)
-      synchronize do
-        tag = generate_tag
-        put_string(tag + " " + cmd)
-        args.each do |i|
-          put_string(" ")
-          send_data(i)
-        end
-        put_string(CRLF)
-        if cmd == "LOGOUT"
-          @logout_command_tag = tag
-        end
+      @send_command_mutex.synchronize do
+        send_command_unlocked(cmd, *args, &block)
+      end
+    end
+
+    def send_command_unlocked(cmd, *args, &block)
+      tag = generate_tag
+      @stop_sending_command = false
+      
+      if cmd == "LOGOUT"
+        @logout_command_tag = tag
+      end
+      if block
+        add_response_handler(block)
+      end
+
+      put_string(tag + " " + cmd)
+      args.each do |i|
+        put_string(" ")
+        send_data(i)
+      end
+      put_string(CRLF)
+      @stop_sending_command = false
+
+      begin
+        get_tagged_response(tag, cmd)
+      ensure
         if block
-          add_response_handler(block)
-        end
-        begin
-          return get_tagged_response(tag, cmd)
-        ensure
-          if block
-            remove_response_handler(block)
-          end
+          remove_response_handler(block)
         end
       end
     end
@@ -1059,12 +1086,13 @@ module Net
     end
     
     def put_string(str)
+      return if @stop_sending_command
       @sock.print(str)
       if @@debug
         if @debug_output_bol
-          $stderr.print("C: ")
+          $stderr.print("C#{@cid}: ")
         end
-        $stderr.print(str.gsub(/\n(?!\z)/n, "\nC: "))
+        $stderr.print(str.gsub(/\n(?!\z)/n, "\nC#{@cid}: "))
         if /\r\n\z/n.match(str)
           @debug_output_bol = true
         else
@@ -1113,7 +1141,12 @@ module Net
 
     def send_literal(str)
       put_string("{" + str.length.to_s + "}" + CRLF)
-      @continuation_request_arrival.wait
+      @receive_response_mutex.synchronize do
+        while !@received_continuation_request && !@stop_sending_command
+          @receive_response_cond.wait(@receive_response_mutex) 
+        end
+        @received_continuation_request = false
+      end
       put_string(str)
     end
 
@@ -1158,11 +1191,11 @@ module Net
       else
         normalize_searching_criteria(keys)
       end
-      synchronize do
+      @send_command_mutex.synchronize do
         if charset
-          send_command(cmd, "CHARSET", charset, *keys)
+          send_command_unlocked(cmd, "CHARSET", charset, *keys)
         else
-          send_command(cmd, *keys)
+          send_command_unlocked(cmd, *keys)
         end
         return @responses.delete("SEARCH")[-1]
       end
@@ -1172,9 +1205,9 @@ module Net
       if attr.instance_of?(String)
         attr = RawData.new(attr)
       end
-      synchronize do
+      @send_command_mutex.synchronize do
         @responses.delete("FETCH")
-        send_command(cmd, MessageSet.new(set), attr)
+        send_command_unlocked(cmd, MessageSet.new(set), attr)
         return @responses.delete("FETCH")
       end
     end
@@ -1183,9 +1216,9 @@ module Net
       if attr.instance_of?(String)
         attr = RawData.new(attr)
       end
-      synchronize do
+      @send_command_mutex.synchronize do
         @responses.delete("FETCH")
-        send_command(cmd, MessageSet.new(set), attr, flags)
+        send_command_unlocked(cmd, MessageSet.new(set), attr, flags)
         return @responses.delete("FETCH")
       end
     end
@@ -1201,8 +1234,8 @@ module Net
         normalize_searching_criteria(search_keys)
       end
       normalize_searching_criteria(search_keys)
-      synchronize do
-        send_command(cmd, sort_keys, charset, *search_keys)
+      @send_command_mutex.synchronize do
+        send_command_unlocked(cmd, sort_keys, charset, *search_keys)
         return @responses.delete("SORT")[-1]
       end
     end
@@ -1214,8 +1247,10 @@ module Net
         normalize_searching_criteria(search_keys)
       end
       normalize_searching_criteria(search_keys)
-      send_command(cmd, algorithm, charset, *search_keys)
-      return @responses.delete("THREAD")[-1]
+      @send_command_mutex.synchronize do
+        send_command_unlocked(cmd, algorithm, charset, *search_keys)
+        return @responses.delete("THREAD")[-1]
+      end
     end
 
     def normalize_searching_criteria(keys)

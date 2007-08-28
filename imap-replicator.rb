@@ -17,6 +17,8 @@ end
 SXCfg::Default.load(ARGV.first)
 STDOUT.sync = true
 
+#Net::IMAP.debug = true
+
 r = 0
 usrmap.each do |m|
 	unless m =~ /^(.*):(.*)$/ then

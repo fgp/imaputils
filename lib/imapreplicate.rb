@@ -111,8 +111,10 @@ class ImapReplicator
   def disconnect_mailboxes
     src, @src = @src, nil
     dst, @dst = @dst, nil
-    @src_keepalive.join; @dst_keepalive.join
-    src.disconnect; dst.disconnect
+    @src_keepalive.join if @src_keepalive
+    @dst_keepalive.join if @dst_keepalive
+    src.disconnect if src
+    dst.disconnect if dst
   end
 
   def connect_sieves
