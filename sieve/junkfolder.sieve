@@ -1,7 +1,7 @@
 require ["imapflags", "fileinto"];
 
 #Clear all flags, just to be safe
-removeflag ["$ClassifiedInnocent", "$ClassifiedJunk", "Junk"] ;
+removeflag ["$ClassifiedInnocent", "$ClassifiedJunk"] ;
 
 #Mark as either "$ClassifiedInnocent" or "$ClassifiedJunk".
 if header :is "X-DSPAM-Result" "Whitelisted" {

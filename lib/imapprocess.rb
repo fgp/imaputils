@@ -81,7 +81,6 @@ private
   MessageData = Struct::new(
     :uid,
     :modseq,
-    :junk,
     :classifiedinnocent,
     :classifiedjunk,
     :signature,
@@ -116,7 +115,6 @@ private
     }
 
     FlagData = {
-      "Junk" => [:junk, :junk=],
       "$ClassifiedInnocent" => [:classifiedinnocent, :classifiedinnocent=],
       "$ClassifiedJunk" => [:classifiedjunk, :classifiedjunk=]
     }
@@ -191,7 +189,7 @@ public
   end
   
   def process_folders
-    STDOUT::puts "Processing user #{@user}"
+    STDOUT::puts "Processing user #{@user} (Max msgs: #{@nr_remaining}, Batchsize:#{@batchsize})"
     folders = (@imapcon.list("", "*").collect do |mbox|
       next nil if mbox.attr.include? :Noselect
       mbox.name
@@ -258,40 +256,24 @@ public
         (SXCfg::Default.folder.corpus.array.include? folder))
     then
       #Handle corpus for this folder.
-      "OR " +
-        "(KEYWORD Junk NOT KEYWORD $ClassifiedJunk) " +
-        "(NOT KEYWORD Junk NOT KEYWORD $ClassifiedInnocent)"
+      "NOT KEYWORD $ClassifiedInnocent NOT KEYWORD $ClassifiedJunk"
     else
       #Don't handle corpus for this folder
-      "OR " +
-        "(KEYWORD Junk KEYWORD $ClassifiedInnocent) " +
-        "(NOT KEYWORD Junk KEYWORD $ClassifiedJunk)"
+      "KEYWORD $ClassifiedJunk"
     end
 
     process_messages(
       "NOT DELETED " +
       condition
     ) do |md|
-      if md.junk then
-        if md.classifiedinnocent then
-          @handler_miss_junk.call(md) if @handler_miss_junk
-          md.classifiedjunk = true
-          md.classifiedinnocent = false
-        elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_junk
-          @handler_corpus_junk.call(md)
-          md.classifiedjunk = true
-          md.classifiedinnocent = false
-        end
-      else
-        if md.classifiedjunk then
-          @handler_miss_innocent.call(md) if @handler_miss_innocent
-          md.classifiedjunk = false
-          md.classifiedinnocent = true
-        elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_innocent
-          @handler_corpus_innocent.call(md)
-          md.classifiedjunk = false
-          md.classifiedinnocent = true
-        end
+      if md.classifiedjunk && @handler_miss_innocent
+        @handler_miss_innocent.call(md)
+        md.classifiedjunk = false
+        md.classifiedinnocent = true
+      elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_innocent
+        @handler_corpus_innocent.call(md)
+        md.classifiedjunk = false
+        md.classifiedinnocent = true
       end
     end
     
@@ -308,7 +290,7 @@ public
         (SXCfg::Default.folder.corpus.array.include? folder))
     then
       #Handle corpus for this folder.
-      "NOT KEYWORD $ClassifiedJunk"
+      "NOT KEYWORD $ClassifiedInnocent NOT KEYWORD $ClassifiedJunk"
     else
       #Don't handle corpus for this folder
       "KEYWORD $ClassifiedInnocent"
@@ -318,8 +300,8 @@ public
       "NOT DELETED " +
       condition
     ) do |md|
-      if md.classifiedinnocent then
-        @handler_miss_junk.call(md) if @handler_miss_junk
+      if md.classifiedinnocent && @handler_miss_junk
+        @handler_miss_junk.call(md)
         md.classifiedjunk = true
         md.classifiedinnocent = false
       elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_junk
