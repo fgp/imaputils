@@ -186,6 +186,55 @@ public
     end
     @nr_remaining = limit || SXCfg::Default.limits.msgs_per_run.int
     @batchsize = SXCfg::Default.limits.batchsize.int || 8
+    
+    @ignore_regexps = SXCfg::Default.folder.ignore.array.collect {|p| compile_pattern(p) }
+    @junk_regexps = SXCfg::Default.folder.junk.array.collect {|p| compile_pattern(p) }
+    @corpus_regexps = SXCfg::Default.folder.corpus.array.collect {|p| compile_pattern(p) }
+  end
+  
+  def compile_pattern(pattern)
+    #First, remove any backslash encoding, and add a \0, because
+    #otherwise the loop below will miss the last character
+    pattern = (pattern.gsub(/\\(.)/) { $1 }) + "\000"
+    
+    #Anchor regex
+    regexp = "\\A"
+
+    #Scan the pattern, in a LL(1) kind of way.
+    s = Array::new
+    pattern.each_byte do |c|
+      s.push c
+
+      next if s.length < 2
+
+      regexp +=
+        if (s == [?., ?.]) || (s == [?/, ?/]) || (s == [?*, ?*])
+          # ".." means a literal dot, same for "//" and "**"
+          s.shift
+          Regexp::escape(s.shift.chr)
+        elsif (s[0] == ?.) || (s[0] == ?/) #/ - just to fix joe syntax highlighting
+          # "." and "/" get converted to the delimiter
+          s.shift
+          Regexp::escape(@delimiter)
+        elsif (s[0] == ?*)
+          # "*" means ".*" in regexp-speak
+          s.shift
+          ".*"
+        else
+          # Anything else matches itself
+          Regexp::escape(s.shift.chr)
+        end
+    end
+    
+    #Anchor regex
+    regexp += "\\Z"
+    
+    Regexp::new(regexp)
+  end
+  
+  def match_regexps(regexps, s)
+    regexps.each {|r| return true if r =~ s}
+    false
   end
   
   def process_folders
@@ -196,12 +245,14 @@ public
     end).compact
     folders.each do |folder|
       break unless !@nr_remaining || (@nr_remaining > 0)
-      if SXCfg::Default.folder.junk.array.include? folder
-        process_junk_folder(folder)
-      elsif SXCfg::Default.folder.ignore.array.include? folder
+
+      if match_regexps(@ignore_regexps, folder)
+        #Ignore folder
         next
+      elsif match_regexps(@junk_regexps, folder)
+        process_junk_folder(folder, match_regexps(@corpus_regexps, folder))
       else
-        process_standard_folder(folder)
+        process_standard_folder(folder, match_regexps(@corpus_regexps, folder))
       end
     end
   end
@@ -248,13 +299,10 @@ public
     end
   end
 
-  def process_standard_folder(folder)
-    return unless open_folder(folder)
+  def process_standard_folder(folder, corpus)
+    return unless open_folder(folder, corpus ? "NonJunk,Corpus" : "NonJunk")
 
-    condition = if (@handler_corpus_junk || @handler_corpus_innocent) &&
-       (SXCfg::Default.folder.corpus.array.empty? ||
-        (SXCfg::Default.folder.corpus.array.include? folder))
-    then
+    condition = if (@handler_corpus_junk || @handler_corpus_innocent) && corpus
       #Handle corpus for this folder.
       "NOT KEYWORD $ClassifiedInnocent NOT KEYWORD $ClassifiedJunk"
     else
@@ -282,13 +330,10 @@ public
     close_folder(e)
   end
 
-  def process_junk_folder(folder)
-    return unless open_folder(folder)    
+  def process_junk_folder(folder, corpus)
+    return unless open_folder(folder, corpus ? "Junk,Corpus" : "Junk")    
 
-    condition = if @handler_corpus_junk &&
-       (SXCfg::Default.folder.corpus.array.empty? ||
-        (SXCfg::Default.folder.corpus.array.include? folder))
-    then
+    condition = if @handler_corpus_junk && corpus
       #Handle corpus for this folder.
       "NOT KEYWORD $ClassifiedInnocent NOT KEYWORD $ClassifiedJunk"
     else
@@ -320,8 +365,8 @@ public
   #If nothing seems to have changed, the folder is _not_ selected,
   #and false is returned. Otherwise the folder is selected read-only
   #and true is returned.
-  def open_folder(folder)
-    STDOUT::puts "  Checking #{folder}"
+  def open_folder(folder, type)
+    STDOUT::puts "  Checking #{folder} (#{type})"
 
     @folder = folder  
     @folder_state = ImapState::new(@user + "." + folder)
@@ -374,7 +419,7 @@ public
     #If @folder is nil, we just write an error message if error is set.
     error_message = error.message.gsub(/\n/, "\n    ") if error
     unless @folder
-      STDOUT::puts "  Error processing folder #{@folder}\n    #{msg}\n" if error
+      STDOUT::puts "  Error processing folder #{@folder}\n    #{error_message}\n" if error
       return
     end
       
