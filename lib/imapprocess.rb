@@ -83,6 +83,7 @@ private
     :modseq,
     :classifiedinnocent,
     :classifiedjunk,
+    :junk,
     :signature,
     :subject,
     :raw
@@ -116,7 +117,8 @@ private
 
     FlagData = {
       "$ClassifiedInnocent" => [:classifiedinnocent, :classifiedinnocent=],
-      "$ClassifiedJunk" => [:classifiedjunk, :classifiedjunk=]
+      "$ClassifiedJunk" => [:classifiedjunk, :classifiedjunk=],
+      "Junk" => [:junk, :junk=]
     }
 
     def self.diff_flags(e_old, e_new)
@@ -318,6 +320,10 @@ public
         @handler_miss_innocent.call(md)
         md.classifiedjunk = false
         md.classifiedinnocent = true
+        #For conveniance, remove the "Junk" flag if it's set. This should suppress
+        #the "Junk" icon Thunderbird displays if you move a message from the Junk-Folder
+        #to any other folder.
+        md.junk = false
       elsif !md.classifiedinnocent && !md.classifiedjunk && @handler_corpus_innocent
         @handler_corpus_innocent.call(md)
         md.classifiedjunk = false
@@ -335,7 +341,7 @@ public
 
     condition = if @handler_corpus_junk && corpus
       #Handle corpus for this folder.
-      "NOT KEYWORD $ClassifiedInnocent NOT KEYWORD $ClassifiedJunk"
+      "NOT KEYWORD $ClassifiedJunk"
     else
       #Don't handle corpus for this folder
       "KEYWORD $ClassifiedInnocent"
