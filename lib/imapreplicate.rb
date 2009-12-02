@@ -310,10 +310,22 @@ class ImapFolderReplicator
     begin
       @replicator.dst.select(@folder_dst)
     rescue Net::IMAP::NoResponseError => e
+      STDOUT::puts "      Creating folder on destination"
       @replicator.dst.create(@folder_dst)
-      @replicator.dst.subscribe(@folder_dst)
-      @replicator.dst.select(@folder_dst)
     end
+    
+    sub_src = !@replicator.src.lsub("", @folder_src).empty?
+    sub_dst = !@replicator.dst.lsub("", @folder_dst).empty?
+    if sub_src && !sub_dst
+      STDOUT::puts "      Subscription state differs, updating destination state to <subscribed>"
+      @replicator.dst.subscribe(@folder_dst)
+    elsif !sub_src && sub_dst
+      STDOUT::puts "      Subscription state differs, updating destination state to <unsubscribed>"
+      @replicator.dst.unsubscribe(@folder_dst)
+    end
+      
+    @replicator.dst.select(@folder_dst)
+
     msgs_src = query_msgs(@replicator.src, "Source")
     msgs_dst = query_msgs(@replicator.dst, "Destination")
     added_msgs, updated_msgs, removed_msgs = *diff_msgs(
