@@ -11,6 +11,7 @@ if header :is "X-DSPAM-Result" "Whitelisted" {
 elsif anyof(header :is "X-DSPAM-Result" "Spam", header :is "X-Spam-Flag" "YES") {
 	#If either spam or spamassassin classified as Junk, it's junk.
 	addflag "$ClassifiedJunk" ;
+	addflag "Junk";
 }
 else {
 	addflag "$ClassifiedInnocent" ;
