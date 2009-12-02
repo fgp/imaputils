@@ -29,6 +29,7 @@ end
 class ImapProcessor
   attr_accessor :batchsize
   attr_accessor(
+    :valid_user,
     :handler_miss_innocent,
     :handler_miss_junk,
     :handler_corpus_innocent,
@@ -47,6 +48,7 @@ class ImapProcessor
       $1
     end).compact
     users.each do |user|
+      next unless @valid_user.call(user)
       iup = ImapUserProcessor::new(user)
       iup.batchsize = @batchsize if @batchsize
       iup.handler_miss_innocent = ImapProcessor::handler(user, @handler_miss_innocent) if @handler_miss_innocent

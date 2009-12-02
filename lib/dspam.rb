@@ -8,8 +8,8 @@ module DSPAM
     in_read, in_write = *IO::pipe
     out_read, out_write = *IO::pipe
  
-    raise DSPAMError::new("Couldn't find dspam executable: #{SXCfg::Default.dspam.string}") unless
-      FileTest::executable? SXCfg::Default.dspam.string
+    raise DSPAMError::new("Couldn't find dspam executable: #{SXCfg::Default.dspam.command.string}") unless
+      FileTest::executable? SXCfg::Default.dspam.command.string
 
     Thread::critical = true
     if (pid = fork).nil? then
@@ -20,7 +20,7 @@ module DSPAM
       in_read.close
       out_write.close
 
-      Kernel::exec(SXCfg::Default.dspam.string, *args)
+      Kernel::exec(SXCfg::Default.dspam.command.string, *args)
     end
 
     in_read.close; out_write.close
@@ -30,7 +30,7 @@ module DSPAM
     out_read.close
     dummy, status = *Process::waitpid2(pid)
 
-    raise DSPAMError::new("#{SXCfg::Default.dspam.string} #{args.join(' ')}\n" + output) unless status == 0
+    raise DSPAMError::new("#{SXCfg::Default.dspam.command.string} #{args.join(' ')}\n" + output) unless status == 0
   ensure
     Thread::critical = false
   end

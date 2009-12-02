@@ -10,6 +10,9 @@ require 'lib/dspam'
 STDOUT.sync = true
 
 imapproc = ImapProcessor::new
+imapproc.valid_user = proc do |user|
+  return (File::exist? "#{SXCfg::Default.dspam.opt_in.string}/#{user}.dspam")
+end
 imapproc.handler_miss_innocent = proc do |user, md|
   next if md.signature.nil? || md.signature.empty?
   puts "    MISS INNOCENT: #{md.signature} (#{md.uid}: #{md.subject})"
