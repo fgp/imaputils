@@ -2,11 +2,12 @@ require 'lib/sxconfig.rb'
 require 'lib/imap'
 require 'lib/imapstate'
 
+# ImapCLient: Creates an IMAP connection and authenticates as the
+#             requested user by using proxy authentication plus the
+#             admin username and password from the config file. 
+#
+#             Returns a triple (connection, user, delimiter)
 module ImapClient
-  #Connections to the server specified in the config file as
-  #the given user.
-  #Returns a connection, the user (In case it was defaulted
-  #for the config file too), and the delimiter.
   def self.login(user=nil)
     user = user || SXCfg::Default.imap.user.string
     imapcon = Net::IMAP::new(SXCfg::Default.imap.server.string)
@@ -26,6 +27,10 @@ module ImapClient
   end
 end
 
+# ImapProcessor: Creates an ImapUserProcessor instance for
+#                every valid user, and uses it to process
+#                the user's folders.
+#
 class ImapProcessor
   attr_accessor :batchsize
   attr_accessor(
@@ -36,7 +41,7 @@ class ImapProcessor
     :handler_corpus_junk
   )
 
-  #Process all users that match the given pattern
+  # process_user: Process all users that match the given pattern
   def process_users(pattern='%')
     @imapcon, user, delimiter = ImapClient::login
     users = (@imapcon.list(
@@ -48,7 +53,10 @@ class ImapProcessor
       $1
     end).compact
     users.each do |user|
+      # Skip users for which the valid_user callback returns false
       next unless @valid_user.call(user)
+      
+      # Create and setup per-user processor instance, and process
       iup = ImapUserProcessor::new(user)
       iup.batchsize = @batchsize if @batchsize
       iup.handler_miss_innocent = ImapProcessor::handler(user, @handler_miss_innocent) if @handler_miss_innocent
@@ -59,11 +67,38 @@ class ImapProcessor
     end
   end
 
+  # handler: Assumes that @h is something callable that takes two parameters,
+  #          and binds it's first parameter to <user>, returning a callbacke
+  #          that takes only one parameter. For ye haskell junkies:
+  #          a -> (a -> b -> c) -> (b -> c)
   def self.handler(user, h)
     proc {|md| h.call(user, md)}
   end
 end
 
+
+# ImapProcessor: Process all folders of a given user, either
+#                as junk or as innocent folder, depending
+#                on the the junk and innocent folder patterns
+#                from the config file.
+#
+#                Remembers a little bit of state for each
+#                folder to be able to quickly skip already
+#                processed messages. The state is kept on
+#                the server too, though (as IMAP flags).
+#                Blowing away the local state will thus
+#                slow the next processing run (which will
+#                rebuild the state), and not cause any
+#                malfunction.
+#
+#                #batchsize defines the number of messages
+#                fetched at once. Large values mean higher
+#                memory usage while lower values mean more
+#                overhead.
+#
+#                #handler_{miss,corpus}_{innocent,junk} can
+#                be set a a callable to handle the respective
+#                case.
 class ImapUserProcessor
   class ServerConfigError < Exception
   end
@@ -80,6 +115,7 @@ class ImapUserProcessor
 
 private
 
+  # MessageData: Fetches and stores per-message data.
   MessageData = Struct::new(
     :uid,
     :modseq,
@@ -90,10 +126,16 @@ private
     :subject,
     :raw
   )
-
-  #This class manages retrieval of message flags, and of updating
-  #them on the server.
   class MessageData
+    # IMAP properties
+    attr_accessor :uid, :modseq, :subject, :raw
+    
+    # IMAP flags
+    attr_accessor :classifiedinnocent, :classifiedjunk, :junk
+    
+    # Defines which message properties are to be queried. For each attribute
+    # to be queries, a callback is given that defines how to normalize this
+    # attribute's data and how to store it in MessageData instances.
     FetchData = {
       "FLAGS" => proc do |e, a|
         a["FLAGS"].each do |f|
@@ -117,12 +159,18 @@ private
       end
     }
 
+    # Maps IMAP flag names to getters and setters of MessageData instances.
     FlagData = {
       "$ClassifiedInnocent" => [:classifiedinnocent, :classifiedinnocent=],
       "$ClassifiedJunk" => [:classifiedjunk, :classifiedjunk=],
       "Junk" => [:junk, :junk=]
     }
+    
+    def initialize(uid, modseq)
+      @uid, @modseq = uid, modseq
+    end
 
+    # Compute the changes to a message's flags from <e_old> to <e_new>
     def self.diff_flags(e_old, e_new)
       added, removed = Array::new, Array::new
       FlagData.each do |flag, sels|
@@ -132,6 +180,9 @@ private
       [added, removed]
     end
 
+    # Retrieves the message data for the messages with the given <ids>, and
+    # calls the given block once for each message (passing the MessageData
+    # instance).
     def self.process_messages(con, ids)
       flags_add = Hash::new
       flags_remove = Hash::new
@@ -160,6 +211,10 @@ private
     end
   end
 
+  # Mixim for IMAP connections that automatically does a SELECT if
+  # a folder was only EXAMINED not SELECTed but a STORE is attempted.
+  # The store would otherwise fail, since folders openend with
+  # EXAMINE are read-only
   module AutoPromoteExamineToSelect
     def select(folder, *args)
       @selected = @examined = nil
@@ -183,6 +238,7 @@ private
 
 public
 
+  # Initialize per-user message processor.
   def initialize(user=nil, limit=nil)
     @imapcon, @user, @delimiter = *ImapClient::login(user)
     class <<@imapcon
@@ -241,6 +297,9 @@ public
     false
   end
   
+  # Process all folders, either as junk or as innocent folders depending
+  # on the junk regex. Skip folders matching the ignore regex, and enable
+  # corpus training for folders matching the corpus regex
   def process_folders
     STDOUT::puts "Processing user #{@user} (Max msgs: #{@nr_remaining}, Batchsize:#{@batchsize})"
     folders = (@imapcon.list("", "*").collect do |mbox|
@@ -251,12 +310,11 @@ public
       break unless !@nr_remaining || (@nr_remaining > 0)
 
       if match_regexps(@ignore_regexps, folder)
-        #Ignore folder
         next
       elsif match_regexps(@junk_regexps, folder)
         process_junk_folder(folder, match_regexps(@corpus_regexps, folder))
       else
-        process_standard_folder(folder, match_regexps(@corpus_regexps, folder))
+        process_innocent_folder(folder, match_regexps(@corpus_regexps, folder))
       end
     end
   end
@@ -273,6 +331,12 @@ public
       "UTF-8"
     )
 
+    # Do not exceed the message processing budget by clamping
+    # the number of to-be-processed messages to the remaining
+    # message "credit".
+    # NOTE: It's absolutely essential that messages with
+    # lower modseqs are processed first! Otherwise, the
+    # per-folder highestmodseq tracking logic is all wrong!
     if @nr_remaining
       ids = ids_pending[0...@nr_remaining]
     else
@@ -282,28 +346,46 @@ public
     if !ids_pending.empty?
       STDOUT::puts "    Will process #{ids.length} messages out of #{ids_pending.length} matching in batches of #{@batchsize}."
       
+      # Process the messages in batches to avoid memory exhaustion
       while !ids.empty?
+        # Get first @batchsize messages (or all if fewer), and
+        # process.
+        # NOTE: It's again absolutely essential to process the
+        # message in the order of their modseqs!
         ids_now = ids.slice!(0, [ids.length, @batchsize].min)
         STDOUT::puts "    Processing batch of #{ids_now.size} messages."
         MessageData::process_messages(@imapcon, ids_now) do |md|
+          # Invoke per-message callback
           yield(md)
+          
+          # Update folder state
+          # NOTE: We process the messages in the order defined
+          # by their modseq.
           @folder_state.highestmodseq = md.modseq
           @nr_remaining -= 1 if @nr_remaining
         end
       end
     end
 
-    #We have to check if we processed _all_ pending changes,
-    #and if so set highestmodseq to the highestmodseq of then
-    #folder. Otherwise, checking for "nothing to do" by comparing
-    #our last highestmodseq, and the highestmodseq of the folder
-    #doesn't work.
+    # We want the folder state's and the IMAP servers idea
+    # of the current value of highestmodseq to match, since
+    # that allows to quickly skip unchanged folders during
+    # folder scanning. Increasing the folder state's
+    # highestmodseq per message is insufficient for that
+    # purpose, since the message with the highest modseq is
+    # not necessary part of our SEARCH result.
+    # Hence, *if* we're sure that we process *all* pending
+    # messages, we force the folder state's highestmodseq to
+    # match the value reported by the IMAP server.
+    #
+    # This is also the right time to update uidnext at.
     if ids_pending.length == ids.length then
       @folder_state.highestmodseq = @highestmodseq
+      @folder_state.uidnext = @uidnext
     end
   end
 
-  def process_standard_folder(folder, corpus)
+  def process_innocent_folder(folder, corpus)
     return unless open_folder(folder, corpus ? "NonJunk,Corpus" : "NonJunk")
 
     condition = if (@handler_corpus_junk || @handler_corpus_innocent) && corpus
@@ -369,10 +451,10 @@ public
     close_folder(e)
   end
  
-  #Opens a folder.
-  #If nothing seems to have changed, the folder is _not_ selected,
-  #and false is returned. Otherwise the folder is selected read-only
-  #and true is returned.
+  # Opens a folder.
+  # If nothing seems to have changed, the folder is _not_ selected,
+  # and false is returned. Otherwise the folder is selected read-only
+  # and true is returned.
   def open_folder(folder, type)
     STDOUT::puts "  Checking #{folder} (#{type})"
 
@@ -381,7 +463,7 @@ public
 
     resp = @imapcon.status(folder, ["UIDVALIDITY", "UIDNEXT", "HIGHESTMODSEQ"])
       
-    #Try to activate CONDSTORE.
+    # Try to activate CONDSTORE.
     unless resp["HIGHESTMODSEQ"] && (resp["HIGHESTMODSEQ"] > 0)
       STDOUT::puts "    CONDSTORE not available. Trying to fix."
       @imapcon.setannotation(folder, "/vendor/cmu/cyrus-imapd/condstore", "true")
@@ -395,25 +477,30 @@ public
       end
     end
 
+    # If no new messages were stored (UIDNEXT check), and none
+    # if the existing onces where modified (HIGHESTMODSWQ)
+    # changed, skip the folder.
     if
       (@folder_state.uidvalidity == resp["UIDVALIDITY"]) &&
       (@folder_state.uidnext == resp["UIDNEXT"]) &&
       (@folder_state.highestmodseq == resp["HIGHESTMODSEQ"])
     then
-      #Nothing changed. Return false.
       @folder = @folder_state = nil
       return false
     end
 
-    #Something changed. Open folder in read-only mode.
+    # Something changed. Open folder in read-only mode.
     STDOUT::puts "  Processing #{folder}"
     @imapcon.examine(folder, "CONDSTORE")
     @uidvalidity = @imapcon.responses["UIDVALIDITY"][-1]
     @uidnext = @imapcon.responses["UIDNEXT"][-1]
     @highestmodseq = @imapcon.responses["HIGHESTMODSEQ"][-1]
     
+    # Deal with uidvalidity changes. Simply forget all local
+    # state in that case.
     if (@folder_state.uidvalidity != @uidvalidity)
       STDOUT::puts "    UIDVALIDITY changed for #{folder}."
+      @folder_state.uidvalidity = @uidvalidity
       @folder_state.uidnext = @folder_state.highestmodseq = 0
     end
 
@@ -424,19 +511,13 @@ public
   end
   
   def close_folder(error = nil)
-    #If @folder is nil, we just write an error message if error is set.
+    # If @folder is nil, we just write an error message if error is set.
     error_message = error.message.gsub(/\n/, "\n    ") if error
     unless @folder
       STDOUT::puts "  Error processing folder #{@folder}\n    #{error_message}\n" if error
       return
     end
       
-    #We _don't_ set highestmodseq here. This is left to process_messages
-    #because setting it to the current value of the folder is not
-    #always correct.
-    @folder_state.uidvalidity = @uidvalidity
-    @folder_state.uidnext = @uidnext
-
     #CLOSE does an implicit expunge. We want to avoid that, but
     #at the same time we want to make sure the folder is not
     #selected anymore. We therefor send a bogus EXAMINE command,

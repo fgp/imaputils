@@ -1,6 +1,11 @@
   require 'fcntl'
 require 'lib/sxconfig.rb'
 
+# ImapState: Persistently stores the uidvalidity, uidnext and highestmodseq
+#            of an IMAP folder in the directory <statefolder>
+#
+#            The persistent store is read during construction, and updated
+#            by callind #save.
 class ImapState
   class StateLocked < Exception
   end
