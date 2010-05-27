@@ -314,8 +314,10 @@ class ImapFolderReplicator
       @replicator.dst.create(@folder_dst)
     end
     
-    sub_src = !@replicator.src.lsub("", @folder_src).empty?
-    sub_dst = !@replicator.dst.lsub("", @folder_dst).empty?
+    sub_src_state = @replicator.src.lsub("", @folder_src) 
+    sub_src = !(sub_src_state.nil? || sub_src_state.empty?)
+    sub_dst_state = @replicator.dst.lsub("", @folder_dst) 
+    sub_dst = !(sub_dst_state.nil? || sub_dst_state.empty?)
     if sub_src && !sub_dst
       STDOUT::puts "      Subscription state differs, updating destination state to <subscribed>"
       @replicator.dst.subscribe(@folder_dst)
