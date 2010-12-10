@@ -464,7 +464,7 @@ module Net
     def list(refname, mailbox)
       @send_command_mutex.synchronize do
         send_command_unlocked("LIST", refname, mailbox)
-        return @responses.delete("LIST")
+        return @responses.delete("LIST") || Array::new
       end
     end
 
@@ -1554,6 +1554,7 @@ module Net
     #   resp_text_code  ::= "ALERT" / "PARSE" /
     #                       "PERMANENTFLAGS" SPACE "(" #(flag / "\*") ")" /
     #                       "READ-ONLY" / "READ-WRITE" / "TRYCREATE" /
+    #                       "CLOSED" /
     #                       "UIDVALIDITY" SPACE nz_number /
     #                       "UNSEEN" SPACE nz_number /
     #                       atom [SPACE 1*<any TEXT_CHAR except "]">]
@@ -2861,7 +2862,7 @@ module Net
         token = match(T_ATOM)
         name = token.value.upcase
         case name
-        when /\A(?:ALERT|PARSE|READ-ONLY|READ-WRITE|TRYCREATE|NOMODSEQ)\z/n
+        when /\A(?:ALERT|PARSE|READ-ONLY|READ-WRITE|TRYCREATE|NOMODSEQ|CLOSED)\z/n
           result = ResponseCode.new(name, nil)
         when /\A(?:PERMANENTFLAGS)\z/n
           match(T_SPACE)
