@@ -16,7 +16,7 @@ class ImapReplicator
     if !pw_src
       pw_src = SXCfg::Default.imap.src.proxypwd.string
       if pw_src[0] == ?< then
-        @pw_src = File::read(pw_src[1..-1])
+        pw_src = File::read(pw_src[1..-1])
       end
     end
     if !pw_dst
