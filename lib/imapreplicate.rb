@@ -262,11 +262,11 @@ class ImapFolderReplicator
     def initialize(envelope)
       if envelope.message_id && !envelope.message_id.empty?
         @id_str =
-          (envelope.date || "") + 0.chr +
+          (envelope.date ? DateTime.parse(envelope.date).to_s : "") + 0.chr +
           (envelope.message_id || "")
       else
         @id_str =
-          (envelope.date || "") + 0.chr +
+          (envelope.date ? DateTime.parse(envelope.date).to_s : "") + 0.chr +
           (envelope.subject || "") + 0.chr +
           addrlist(envelope.from) + 0.chr +
           addrlist(envelope.to) + 0.chr +
@@ -296,6 +296,10 @@ class ImapFolderReplicator
 
     def eql?(other)
       return self == other
+    end
+    
+    def to_s
+      @id_str
     end
   end
 
@@ -446,7 +450,7 @@ class ImapFolderReplicator
     return if msgs.empty?
 
     STDOUT::puts "      Destination: Will delete #{msgs.length} messages in batches #{ImapReplicator::ScanBatchSize}."
-    STDOUT::write "      |"
+    STDOUT::write "        |"
     total = msgs.length
     while !msgs.empty?
       STDOUT::write "."
@@ -517,6 +521,7 @@ class ImapFolderReplicator
     while (i_src < msgs_src.length) && (i_dst < msgs_dst.length)
       #Skip messages with the same id as their predecessor
       if (i_src > 0) && (msgs_src[i_src-1].msgid == msgs_src[i_src].msgid)
+        STDOUT::puts "        WARNING: Duplicate message id #{msgs_src[i_src].msgid.inspect}"
         i_src += 1
         next
       end
