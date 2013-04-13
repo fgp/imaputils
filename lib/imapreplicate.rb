@@ -182,27 +182,25 @@ class ImapReplicator
       SXCfg::Default.folders.ignore.array.each do |ign|
         skip = true if Regexp::new(ign) =~ folder_src
       end
-    
-      folder_dst = if folder_src =~ /^#{Regexp::escape(@prefix_src + @delimiter_src)}([^#{Regexp::escape(@delimiter_src)}].*)$/
-        removed_prefix = true
-        $1
+      
+      folder_dst = if /\AINBOX\z/i =~ folder_src
+        folder_dst = "INBOX"
       else
-        removed_prefix = false
-        folder_src
-      end
-
-      folder_dst = if @delimiter_src != @delimiter_dst then
-        folder_dst.tr(@delimiter_dst, "_").tr(@delimiter_src, @delimiter_dst)
-      else
-        folder_dst
-      end
-
-      folder_dst = if removed_prefix && !@prefix_dst.empty? then
-        @prefix_dst + @delimiter_dst + folder_dst
-      else
-        folder_dst
-      end
+        f = if (!@prefix_src.empty?) && (folder_src =~ /^#{Regexp::escape(@prefix_src + @delimiter_src)}([^#{Regexp::escape(@delimiter_src)}].*)$/) then
+          $1
+        else
+          folder_src
+        end
         
+        f = f.split(@delimiter_src).join(@delimiter_dst)
+        
+        if !@prefix_dst.empty?
+          @prefix_dst + @delimiter_dst + f
+        else
+          f
+        end
+      end
+    
       @mailbox_map[folder_src] = folder_dst
       
       next if skip
