@@ -13,6 +13,8 @@ folders:
       - *
     -<flag2>:
       - <folder1 where flag2 will be removed from msgs>
+sieve:
+  replicate: <true|false>
 imap:
   src:
     server: <servername>

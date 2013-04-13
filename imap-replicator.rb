@@ -31,7 +31,7 @@ usrmap.each do |m|
 		STDOUT::puts "Migrating #{srcusr} -> #{dstusr}"
 		replicator = ImapReplicator::new(srcusr, dstusr)
 		replicator.replicate_mailbox
-		replicator.replicate_sieve
+		replicator.replicate_sieve if SXCfg::Default.sieve.replicate.bool
 		STDOUT::puts "Done migrating #{srcusr} -> #{dstusr}"
 	rescue Exception => e
 		STDERR::puts "Failed to process #{srcusr} -> #{dstusr}: #{e.message} (#{e.class.name})"
