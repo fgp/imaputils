@@ -53,8 +53,8 @@ class ImapReplicator
   end
 
   def connect_mailboxes
-    @src = Net::IMAP::new(SXCfg::Default.imap.src.server.string)
-    @dst = Net::IMAP::new(SXCfg::Default.imap.dst.server.string)
+    @src = Net::IMAP::new(SXCfg::Default.imap.src.server.string, SXCfg::Default.imap.src.port.int || 143, SXCfg::Default.imap.src.ssl.bool || false)
+    @dst = Net::IMAP::new(SXCfg::Default.imap.dst.server.string, SXCfg::Default.imap.dst.port.int || 143, SXCfg::Default.imap.dst.ssl.bool || false)
     authenticate_mailbox(
       @src,
       SXCfg::Default.imap.src.mech.string,

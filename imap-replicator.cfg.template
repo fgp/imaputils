@@ -2,6 +2,9 @@ folders:
   ignore:
     - <Folder to ignore>
     - <Folder to ignore>
+  map:
+    <regexp>: <replacement>
+    <regexp>: <replacement>
   flags:
     +<flag1>:
       - <folder1 where flag1 will be set on msgs>
