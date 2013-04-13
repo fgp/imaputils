@@ -2,9 +2,6 @@ folders:
   ignore:
     - <Folder to ignore>
     - <Folder to ignore>
-  map:
-    <regexp>: <replacement>
-    <regexp>: <replacement>
   flags:
     +<flag1>:
       - <folder1 where flag1 will be set on msgs>
@@ -19,12 +16,16 @@ folders:
 imap:
   src:
     server: <servername>
+    port: <port>
+    ssl: <true|false>
     mech: <authentication mechanism>
     proxyusr: <user to authenticate as>
     proxypwd: <password of authuser>
     prefix: <foldername prefix to strip>
   dst:
     server: <servername>
+    port: <port>
+    ssl: <true|false>
     mech: <authentication mechanism>
     proxyusr: <user to authenticate as>
     proxypwd: <password of authuser>
