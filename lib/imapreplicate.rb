@@ -83,38 +83,36 @@ class ImapReplicator
     #Start one thread for each connection, the periodically calls noop
     #This prevents the server from closing the connection because of
     #inactivity.
+    @keepalive = true
+    
     @src_keepalive = Thread::new do
       i = 0
-      while @src
-        begin
-          @src.noop() if i % 10 == 0
-          i = (i + 1) % 10
-          Kernel::sleep(1)
-        rescue Exception
-        end
+      while @keepalive
+        @src.noop() if i % 10 == 0
+        i = (i + 1) % 10
+        Kernel::sleep(1)
       end
     end
 
     @dst_keepalive = Thread::new do
       i = 0
-      while @dst
-        begin
-          @dst.noop() if i % 10 == 0
-          i = (i + 1) % 10
-          Kernel::sleep(1)
-        rescue Exception
-        end
+      while @keepalive
+        @dst.noop() if i % 10 == 0
+        i = (i + 1) % 10
+        Kernel::sleep(1)
       end
     end
   end
   
   def disconnect_mailboxes
-    src, @src = @src, nil
-    dst, @dst = @dst, nil
+    @keepalive = false
     @src_keepalive.join if @src_keepalive
     @dst_keepalive.join if @dst_keepalive
-    src.disconnect if src
-    dst.disconnect if dst
+    STDOUT::puts "  Disconnect souce"
+    @src.disconnect if @src
+    STDOUT::puts "  Disconnect destination"
+    @dst.disconnect if @dst
+    STDOUT::puts "  Disconnected"
   end
 
   def connect_sieves

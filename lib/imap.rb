@@ -272,9 +272,9 @@ module Net
 
     # Disconnects from the server.
     def disconnect
-      @sock.shutdown unless @usessl
-      @receiver_thread.join
+      logout
       @sock.close
+      @receiver_thread.join
     end
 
     # Returns true if disconnected from the server.
@@ -963,8 +963,10 @@ module Net
         begin
           resp = get_response
         rescue Exception
-          @sock.close
-          @client_thread.raise($!)
+          unless @sock.closed?
+            @sock.close
+            @client_thread.raise($!)
+          end
           break
         end
         break unless resp
