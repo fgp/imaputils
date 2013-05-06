@@ -2873,11 +2873,15 @@ module Net
           match(T_SPACE)
           result = ResponseCode.new(name, number)
         else
-          match(T_SPACE)
-          @lex_state = EXPR_CTEXT
-          token = match(T_TEXT)
-          @lex_state = EXPR_BEG
-          result = ResponseCode.new(name, token.value)
+          if lookahead.symbol != T_RBRA
+            match(T_SPACE)
+            @lex_state = EXPR_CTEXT
+            token_value = match(T_TEXT).value
+            @lex_state = EXPR_BEG
+          else
+            token_value = nil
+          end
+          result = ResponseCode.new(name, token_value)
         end
         match(T_RBRA)
         @lex_state = EXPR_RTEXT
