@@ -30,17 +30,22 @@ class ImapReplicator
 
   def authenticate_mailbox(con, mech, authz_user, auth_user, password)
     begin
-      con.authenticate(
-        mech,
-        authz_user,
-        *(
-          if !auth_user
-            [password]
-          else
-            [auth_user, password]
-          end
-        )
-      )
+      case mech
+        when "LOGIN" 
+          con.login(authz_user, password)
+        else
+          con.authenticate(
+            mech,
+            authz_user,
+            *(
+              if !auth_user
+                [password]
+              else
+                [auth_user, password]
+              end
+            )
+          )
+       end
     rescue Net::IMAP::NoResponseError
       if auth_user
         STDOUT::puts "    Failed to authorize as #{authz_user} by authenticating as #{auth_user} via #{mech}"
@@ -108,7 +113,7 @@ class ImapReplicator
     @keepalive = false
     @src_keepalive.join if @src_keepalive
     @dst_keepalive.join if @dst_keepalive
-    STDOUT::puts "  Disconnect souce"
+    STDOUT::puts "  Disconnect source"
     @src.disconnect if @src
     STDOUT::puts "  Disconnect destination"
     @dst.disconnect if @dst
@@ -209,8 +214,14 @@ class ImapReplicator
       STDOUT::puts "    Finished processing #{folder_src} -> #{folder_dst}"
     end
     STDOUT::puts "  Finished processing mailbox"
-  ensure
+
     disconnect_mailboxes
+  rescue Exception => e
+    begin
+      disconnect_mailboxes
+    rescue Exception
+    end
+    raise e
   end
 
   def replicate_sieve
@@ -253,13 +264,14 @@ class ImapFolderReplicator
   class MsgId
     include Comparable
 
-    attr_reader :id_str, :id_hash
+    attr_reader :id_str, :id_hash, :descr
 
     def initialize(envelope)
+      @descr = addrlist(envelope.from) + ":" + (envelope.subject || "")
       if envelope.message_id && !envelope.message_id.empty?
         @id_str =
           (envelope.date ? DateTime.parse(envelope.date).to_s : "") + 0.chr +
-          (envelope.message_id || "")
+          (envelope.message_id || "").strip
       else
         @id_str =
           (envelope.date ? DateTime.parse(envelope.date).to_s : "") + 0.chr +
@@ -295,7 +307,7 @@ class ImapFolderReplicator
     end
     
     def to_s
-      @id_str
+      @id_str + "(" + @descr + ")"
     end
   end
 
@@ -379,12 +391,36 @@ class ImapFolderReplicator
     flags
   end
   
+  def append_msgs(msgs_data)
+    ok = 0
+  
+    begin
+      @replicator.dst.multiappend(@folder_dst, msgs_data)
+      ok = msgs_data.length
+    rescue Net::IMAP::ResponseError => e
+      msgs_data.each do |msg_data|
+        begin
+          @replicator.dst.append(@folder_dst, *msg_data)
+          ok = ok + 1
+        rescue Net::IMAP::ResponseError => e
+          #Ignore
+        end
+      end
+    end
+    
+    ok
+  rescue Exception => e
+    STDERR::puts "ERROR: #{e.inspect}"
+    raise
+  end
+  
   def add_msgs(msgs)
     return if msgs.empty?
 
     STDOUT::puts "      Destination: Will add #{msgs.length} messages in batches of #{ImapReplicator::AddBatchSize}."
     STDOUT::write "        |"
     total = msgs.length
+    failed = 0
     while !msgs.empty?
       STDOUT::write "."
       msgs_now = msgs.slice!(0, [msgs.length, ImapReplicator::AddBatchSize].min)
@@ -397,24 +433,12 @@ class ImapFolderReplicator
         [res.attr["BODY[]"], flags, res.attr["INTERNALDATE"]]
       end
       msgs_data.compact!
-      begin
-        @replicator.dst.multiappend(@folder_dst, msgs_data)
-      rescue Exception => e
-        STDOUT::puts "Caught #{e.message} while appending these messages:"
-        msgs_data.each do |msg_data|
-          msg, flags, date = *msg_data
-          STDOUT::puts "--------------------------------------------------------------------------------"
-          STDOUT::puts "FLAGS: #{flags.inspect}"
-          STDOUT::puts "INTERNALDATE: #{date}"
-          STDOUT::puts "BODY (Limited to 5k bytes):"
-          STDOUT::puts msg[0..(5*1024)]
-          STDOUT::puts "--------------------------------------------------------------------------------"
-        end
-        raise
-      end
+
+      failed = failed + msgs_data.length - append_msgs(msgs_data)
       write_percent(total - msgs.length, total, msgs_now.length)
     end
     STDOUT::puts "|"
+    STDOUT::write "        WARNING: #{failed} messages couldn't be added" if failed > 0
   end
 
   def update_msgs(msgs)
@@ -543,10 +567,12 @@ class ImapFolderReplicator
         i_dst += 1
       elsif (msg_src.msgid < msg_dst.msgid)
         #Message is missing on destination
+#        STDOUT::puts "        INFO: Will add #{msg_src.msgid.to_s}"
         added_msgs << msg_src
         i_src += 1
       else
         #Message was removed on source
+#        STDOUT::puts "        INFO: Will remove #{msg_dst.msgid.to_s}"
         removed_msgs << msg_dst
         i_dst += 1
       end

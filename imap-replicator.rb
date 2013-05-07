@@ -17,7 +17,7 @@ end
 SXCfg::Default.load(ARGV.first)
 STDOUT.sync = true
 
-#Net::IMAP.debug = true
+# Net::IMAP.debug = true
 
 r = 0
 usrmap.each do |m|
@@ -35,7 +35,7 @@ usrmap.each do |m|
 		STDOUT::puts "Done migrating #{srcusr} -> #{dstusr}"
 	rescue Exception => e
 		STDERR::puts "Failed to process #{srcusr} -> #{dstusr}: #{e.message} (#{e.class.name})"
-#		STDERR::puts e.backtrace.join("\n")
+		STDERR::puts e.backtrace.join("\n")
 		r = 1
 	end		
 end
