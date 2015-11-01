@@ -2,6 +2,7 @@
 # = net/imap.rb
 #
 # Copyright (C) 2000  Shugo Maeda <shugo@ruby-lang.org>
+# Copyright (c) 2006 - 2015 Florian Pflug <fgp@phlo.org>
 #
 # This library is distributed under the terms of the Ruby license.
 # You can freely distribute/modify this library.

@@ -2,6 +2,7 @@
 #
 #--
 # Copyright (c) 2004-2006 Andre Nathan <andre@digirati.com.br>
+# Copyright (c) 2006 - 2015 Florian Pflug <fgp@phlo.org>
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
